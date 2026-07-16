@@ -1,0 +1,103 @@
+{
+  "version": "1.0",
+  "source_width": 1280,
+  "source_height": 720,
+  "background": {
+    "kind": "solid",
+    "color": "#FFFFFF",
+    "opacity": 1,
+    "angle_deg": null,
+    "stops": []
+  },
+  "components": [],
+  "elements": [
+    {
+      "kind": "text",
+      "id": "title",
+      "name": "PowerPoint compatibility fixture",
+      "layer": 10,
+      "group_id": null,
+      "bounds": {"x": 72, "y": 48, "width": 720, "height": 70},
+      "rotation_deg": 0,
+      "text": "Native PowerPoint compatibility",
+      "font_family": "Arial",
+      "font_size_pt": 28,
+      "bold": true,
+      "italic": false,
+      "color": "#102A43",
+      "opacity": 1,
+      "alignment": "left",
+      "vertical_alignment": "middle",
+      "line_spacing": 1,
+      "margin_px": 0
+    },
+    {
+      "kind": "shape",
+      "id": "rounded-panel",
+      "name": "Rounded panel",
+      "layer": 20,
+      "group_id": null,
+      "bounds": {"x": 72, "y": 150, "width": 390, "height": 210},
+      "rotation_deg": 0,
+      "preset": "roundRect",
+      "fill": {
+        "kind": "linear_gradient",
+        "color": null,
+        "opacity": 1,
+        "angle_deg": 0,
+        "stops": [
+          {"position": 0, "color": "#D9F1F7", "opacity": 1},
+          {"position": 1, "color": "#1385A5", "opacity": 0.82}
+        ]
+      },
+      "stroke": {"color": "#087893", "opacity": 1, "width_px": 2, "dash": "solid"},
+      "corner_radius": 18
+    },
+    {
+      "kind": "path",
+      "id": "curved-arrow",
+      "name": "Cubic curved arrow",
+      "layer": 30,
+      "group_id": null,
+      "bounds": {"x": 500, "y": 150, "width": 600, "height": 360},
+      "rotation_deg": 0,
+      "fill": {
+        "kind": "linear_gradient",
+        "color": null,
+        "opacity": 1,
+        "angle_deg": 330,
+        "stops": [
+          {"position": 0, "color": "#DCEFF4", "opacity": 0.15},
+          {"position": 0.55, "color": "#1B91AD", "opacity": 0.8},
+          {"position": 1, "color": "#087893", "opacity": 1}
+        ]
+      },
+      "stroke": {"color": "#FFFFFF", "opacity": 0, "width_px": 0, "dash": "solid"},
+      "commands": [
+        {"op": "M", "x": 0.02, "y": 0.98, "x1": null, "y1": null, "x2": null, "y2": null},
+        {"op": "C", "x": 0.72, "y": 0.22, "x1": 0.18, "y1": 0.70, "x2": 0.50, "y2": 0.52},
+        {"op": "L", "x": 0.63, "y": 0.18, "x1": null, "y1": null, "x2": null, "y2": null},
+        {"op": "L", "x": 0.97, "y": 0.03, "x1": null, "y1": null, "x2": null, "y2": null},
+        {"op": "L", "x": 0.99, "y": 0.34, "x1": null, "y1": null, "x2": null, "y2": null},
+        {"op": "L", "x": 0.84, "y": 0.25, "x1": null, "y1": null, "x2": null, "y2": null},
+        {"op": "C", "x": 0.04, "y": 1.0, "x1": 0.58, "y1": 0.60, "x2": 0.25, "y2": 0.88},
+        {"op": "Z", "x": null, "y": null, "x1": null, "y1": null, "x2": null, "y2": null}
+      ]
+    },
+    {
+      "kind": "line",
+      "id": "reversed-connector",
+      "name": "Reversed native connector",
+      "layer": 25,
+      "group_id": null,
+      "x1": 460,
+      "y1": 520,
+      "x2": 170,
+      "y2": 520,
+      "stroke": {"color": "#D65A18", "opacity": 1, "width_px": 3, "dash": "dash"},
+      "arrow_start": "none",
+      "arrow_end": "triangle"
+    }
+  ],
+  "reconstruction_notes": ["Cross-platform PowerPoint round-trip fixture"]
+}

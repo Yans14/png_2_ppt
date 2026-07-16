@@ -1,0 +1,48 @@
+name: powerpoint-compatibility
+
+on:
+  workflow_dispatch:
+
+jobs:
+  powerpoint-windows:
+    runs-on: [self-hosted, windows, powerpoint-m365]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+      - run: npm ci
+      - run: pip install -e .
+      - shell: pwsh
+        run: |
+          python scripts/render_compatibility_fixture.py --output "$env:RUNNER_TEMP\compatibility.pptx"
+          python scripts/validate_powerpoint.py "$env:RUNNER_TEMP\compatibility.pptx" --mode required --workspace "$env:RUNNER_TEMP\ppt-validation" --report "$env:RUNNER_TEMP\powerpoint-report.json"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: powerpoint-windows-report
+          path: ${{ runner.temp }}/powerpoint-report.json
+
+  powerpoint-macos:
+    runs-on: [self-hosted, macos, powerpoint-m365]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+      - run: npm ci
+      - run: pip install -e .
+      - run: |
+          python scripts/render_compatibility_fixture.py --output "$RUNNER_TEMP/compatibility.pptx"
+          python scripts/validate_powerpoint.py "$RUNNER_TEMP/compatibility.pptx" --mode required --workspace "$RUNNER_TEMP/ppt-validation" --report "$RUNNER_TEMP/powerpoint-report.json"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: powerpoint-macos-report
+          path: ${{ runner.temp }}/powerpoint-report.json

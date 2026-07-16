@@ -42,6 +42,10 @@ class BenchmarkRunnerTests(unittest.TestCase):
     def test_cache_must_match_engine_metric_and_run_configuration(self) -> None:
         args = Namespace(
             model="gpt-5.5",
+            quality_profile="balanced",
+            local_optimization="auto",
+            powerpoint_validation="auto",
+            font_policy="portable",
             iterations=1,
             target_score=0.93,
         )
@@ -49,6 +53,10 @@ class BenchmarkRunnerTests(unittest.TestCase):
             "engine_version": RUNNER.__version__,
             "metric_version": RUNNER.METRIC_VERSION,
             "model": "gpt-5.5",
+            "quality_profile": "balanced",
+            "local_optimization": "auto",
+            "powerpoint_validation_mode": "auto",
+            "font_policy": "portable",
             "raster_policy": "photos-only",
             "requested_iterations": 1,
             "target_score": 0.93,
@@ -58,6 +66,7 @@ class BenchmarkRunnerTests(unittest.TestCase):
                 "flattened_slide": False,
                 "canvas_overflow_count": 0,
             },
+            "ooxml_validation": {"compatible": True},
         }
         self.assertTrue(RUNNER.cache_matches(report, args))
         report["metric_version"] = "old"
@@ -70,7 +79,8 @@ class BenchmarkRunnerTests(unittest.TestCase):
                 "picture_objects": 0,
                 "flattened_slide": False,
                 "canvas_overflow_count": 0,
-            }
+            },
+            "ooxml_validation": {"compatible": True},
         }
         self.assertFalse(RUNNER.report_meets_editability_contract(report))
 
@@ -103,6 +113,18 @@ class BenchmarkRunnerTests(unittest.TestCase):
         self.assertEqual(
             RUNNER.effective_iterations(
                 Namespace(rescore_existing=False, iterations=2)
+            ),
+            2,
+        )
+
+    def test_reuse_existing_spec_keeps_requested_llm_iterations(self) -> None:
+        self.assertEqual(
+            RUNNER.effective_iterations(
+                Namespace(
+                    rescore_existing=False,
+                    reuse_existing_spec=True,
+                    iterations=2,
+                )
             ),
             2,
         )

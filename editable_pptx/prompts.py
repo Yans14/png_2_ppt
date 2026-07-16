@@ -91,20 +91,35 @@ def refinement_patch_prompt(
     metrics: dict[str, object],
     current_spec: dict[str, object],
     raster_policy: str,
+    focus_regions: list[dict[str, object]] | None = None,
 ) -> str:
+    focused_metrics = dict(metrics)
+    object_regions = focused_metrics.get("object_regions")
+    if isinstance(object_regions, list):
+        focused_metrics["object_regions"] = object_regions[:12]
+    focus_text = ""
+    if focus_regions:
+        focus_text = (
+            "Additional images follow in source/rendered pairs for these high-error objects: "
+            f"{json.dumps(focus_regions, ensure_ascii=False)}. Inspect those enlarged pairs "
+            "before editing their stable IDs.\n"
+        )
     return (
         "Improve current editable reconstruction. First image is source. Second image is rendered PPTX.\n"
-        "Return a minimal patch, not a complete spec. Upsert only objects that must change; "
+        "Return a minimal patch touching at most four slide elements and two components, not "
+        "a complete spec. Upsert only objects that must change; "
         "keep all other lists empty. Reuse existing IDs when correcting objects. Use new IDs only "
         "for genuinely missing objects. Set background and reconstruction_notes to null when unchanged.\n"
         f"Raster policy: {raster_policy}.\n"
         f"Pixel facts: {json.dumps(image_facts, ensure_ascii=False)}\n"
-        f"Measured differences: {json.dumps(metrics, ensure_ascii=False)}\n"
+        f"Measured differences: {json.dumps(focused_metrics, ensure_ascii=False)}\n"
+        f"{focus_text}"
         "Before choosing edits, compare object topology and silhouettes directly in both images. "
         "A circle, rounded rectangle, chevron, arrow, or organic path must remain the same shape "
         "class even when its pixel score is already high. Treat wrong shape class, connector "
         "direction, and faceted curves as hard structural errors. Then focus on the five worst "
-        "regions and the largest remaining errors: paths, text boxes, spacing, colors, and z-order. "
+        "regions and the lowest-scoring object_regions. Their IDs identify the editable objects "
+        "responsible for the mismatch. Correct paths, text boxes, spacing, colors, and z-order. "
         "Do not churn IDs or rewrite already-correct objects.\n"
         f"Current spec: {json.dumps(current_spec, ensure_ascii=False)}"
     )

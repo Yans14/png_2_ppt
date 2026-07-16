@@ -5,6 +5,37 @@ Metric version: `2`. The score is intentionally structure-weighted (70% structur
 30% exact color/pixels); it is not a claim of pixel perfection. GPT‑5.6 Luna is the
 official cost-sensitive GPT‑5.6 tier and supports image input plus structured outputs.
 
+## Engine 1.2 quality and compatibility validation
+
+Engine `1.2.0` / metric `3` adds per-object error regions, high-error focus crops,
+deterministic local coordinate/color proposals, four-object patch limits, quality profiles,
+font policies, OOXML validation, and optional real PowerPoint round-trips. The global score
+formula is unchanged, so it remains directly comparable with the 1.1 baseline below.
+
+An API-free rescore of all six accepted 1.1 specs reproduced the exact **0.895324** mean.
+All six packages passed the new OOXML relationship, content-type, object-ID, extent,
+gradient, alpha, auto-fit, and font checks. No native object was flattened or moved outside
+the canvas.
+
+A resumed balanced pass evaluated local proposals plus at most one Luna correction per
+case. The mean increased to **0.897527** without accepting any measured regression:
+
+| Case | 1.1 baseline | 1.2 balanced | Delta |
+|---|---:|---:|---:|
+| Agrifood pyramid | 0.953511 | 0.953511 | +0.000000 |
+| Agrifood value chain | 0.829941 | 0.831519 | +0.001578 |
+| OECD DPI dashboard | 0.910827 | 0.917277 | +0.006450 |
+| IDA hybrid model | 0.926387 | 0.930099 | +0.003712 |
+| IDA balance sheet | 0.871860 | 0.872088 | +0.000228 |
+| Indonesia ride-hailing | 0.879418 | 0.880671 | +0.001253 |
+
+The most difficult illustration remains the agrifood value-chain farmer. Luna and Terra
+proposals that made the complete slide or the corrected object set worse were rejected.
+The compatibility fixture also passes the independent canvas-overflow test. A licensed
+Microsoft PowerPoint installation is not present on the development Mac, so real M365
+open/save/export validation is implemented but must run on the documented self-hosted
+Windows and macOS workflows before a release is labelled PowerPoint-verified.
+
 ## Reproducible public set
 
 `benchmarks/manifest.json` defines six slides from four public presentations:
@@ -91,6 +122,7 @@ corrected the right-column line wrapping without replacing the complete object g
 npm run benchmark:fetch
 npm run benchmark -- --model gpt-5.6-luna --iterations 1 --jobs 2
 npm run benchmark -- --rescore-existing --jobs 2
+npm run benchmark -- --reuse-existing-spec --model gpt-5.6-luna --iterations 1 --jobs 2
 ```
 
 The default result directory is ignored by Git. Use `--force` only when successful cached

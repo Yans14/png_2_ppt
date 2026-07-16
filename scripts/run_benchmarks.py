@@ -28,7 +28,8 @@ def report_meets_editability_contract(report: dict[str, Any]) -> bool:
     """Reject blank, flattened, overflowing, or otherwise unusable decks."""
 
     audit = report.get("audit")
-    if not isinstance(audit, dict):
+    ooxml = report.get("ooxml_validation")
+    if not isinstance(audit, dict) or not isinstance(ooxml, dict):
         return False
     native_objects = int(audit.get("native_shape_objects", 0)) + int(
         audit.get("picture_objects", 0)
@@ -37,6 +38,7 @@ def report_meets_editability_contract(report: dict[str, Any]) -> bool:
         native_objects > 0
         and audit.get("flattened_slide") is False
         and int(audit.get("canvas_overflow_count", 0)) == 0
+        and ooxml.get("compatible") is True
     )
 
 
@@ -46,6 +48,26 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--targets-dir", default=ROOT / "benchmarks" / "cache" / "targets", type=Path)
     parser.add_argument("--results-dir", default=ROOT / "benchmarks" / "results", type=Path)
     parser.add_argument("--model", default="gpt-5.5")
+    parser.add_argument(
+        "--quality-profile",
+        choices=["budget", "balanced", "max"],
+        default="balanced",
+    )
+    parser.add_argument(
+        "--local-optimization",
+        choices=["auto", "on", "off"],
+        default="auto",
+    )
+    parser.add_argument(
+        "--powerpoint-validation",
+        choices=["off", "auto", "required"],
+        default="auto",
+    )
+    parser.add_argument(
+        "--font-policy",
+        choices=["portable", "exact"],
+        default="portable",
+    )
     parser.add_argument("--iterations", default=1, type=int)
     parser.add_argument("--target-score", default=0.93, type=float)
     parser.add_argument("--timeout", default=900, type=int)
@@ -58,6 +80,11 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Render existing specs with the current engine without making API calls",
     )
+    parser.add_argument(
+        "--reuse-existing-spec",
+        action="store_true",
+        help="Start paid correction passes from an existing spec instead of reconstructing from scratch",
+    )
     return parser.parse_args()
 
 
@@ -66,6 +93,12 @@ def cache_matches(report: dict[str, Any], args: argparse.Namespace) -> bool:
         report.get("engine_version") == __version__
         and report.get("metric_version") == METRIC_VERSION
         and report.get("model") == args.model
+        and report.get("quality_profile") == getattr(args, "quality_profile", "balanced")
+        and report.get("local_optimization")
+        == getattr(args, "local_optimization", "auto")
+        and report.get("powerpoint_validation_mode")
+        == getattr(args, "powerpoint_validation", "auto")
+        and report.get("font_policy") == getattr(args, "font_policy", "portable")
         and report.get("raster_policy") == "photos-only"
         and report.get("requested_iterations") == args.iterations
         and report.get("target_score") == args.target_score
@@ -96,12 +129,12 @@ def run_case(
     case_dir.mkdir(parents=True, exist_ok=True)
     report_path = case_dir / "report.json"
     spec_path = case_dir / "spec.json"
-    if args.rescore_existing and not spec_path.exists():
+    if (args.rescore_existing or args.reuse_existing_spec) and not spec_path.exists():
         return {
             "id": case_id,
             "status": "missing_spec",
             "elapsed_seconds": 0,
-            "error": "No existing spec is available for offline rescoring.",
+            "error": "No existing spec is available for the requested resumed run.",
         }
     if report_path.exists() and not args.force and not args.rescore_existing:
         report = json.loads(report_path.read_text(encoding="utf-8"))
@@ -130,6 +163,14 @@ def run_case(
         str(case_dir / "work"),
         "--model",
         args.model,
+        "--quality-profile",
+        args.quality_profile,
+        "--local-optimization",
+        args.local_optimization,
+        "--powerpoint-validation",
+        args.powerpoint_validation,
+        "--font-policy",
+        args.font_policy,
         "--iterations",
         str(iterations),
         "--target-score",
@@ -141,7 +182,7 @@ def run_case(
         "--max-output-tokens",
         str(args.max_output_tokens),
     ]
-    if args.rescore_existing:
+    if args.rescore_existing or args.reuse_existing_spec:
         command.extend(["--spec-in", str(spec_path)])
     environment = os.environ.copy()
     environment["PYTHONPATH"] = str(ROOT) + os.pathsep + environment.get("PYTHONPATH", "")
@@ -280,6 +321,11 @@ def main() -> int:
     completed_rows = [row for row in rows if row["status"] in COMPLETED_STATUSES]
     summary = {
         "model": args.model,
+        "quality_profile": args.quality_profile,
+        "local_optimization": args.local_optimization,
+        "powerpoint_validation": args.powerpoint_validation,
+        "font_policy": args.font_policy,
+        "reuse_existing_spec": args.reuse_existing_spec,
         "iterations": effective_iterations(args),
         "case_count": len(results),
         "success_count": sum(result["status"] in COMPLETED_STATUSES for result in results),

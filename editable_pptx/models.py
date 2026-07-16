@@ -406,10 +406,10 @@ class SlidePatch(StrictModel):
     """Small refinement delta, avoiding regeneration of an already-correct slide graph."""
 
     background: FillSpec | None
-    upsert_components: list[ComponentSpec]
-    remove_component_ids: list[str]
-    upsert_elements: list[ElementSpec]
-    remove_element_ids: list[str]
+    upsert_components: list[ComponentSpec] = Field(max_length=2)
+    remove_component_ids: list[str] = Field(max_length=2)
+    upsert_elements: list[ElementSpec] = Field(max_length=4)
+    remove_element_ids: list[str] = Field(max_length=4)
     reconstruction_notes: list[str] | None
 
     @model_validator(mode="after")
@@ -424,6 +424,12 @@ class SlidePatch(StrictModel):
             raise ValueError("a component cannot be both upserted and removed")
         if set(element_ids) & set(self.remove_element_ids):
             raise ValueError("an element cannot be both upserted and removed")
+        touched_elements = set(element_ids) | set(self.remove_element_ids)
+        if len(touched_elements) > 4:
+            raise ValueError("a refinement patch may touch at most four slide elements")
+        touched_components = set(component_ids) | set(self.remove_component_ids)
+        if len(touched_components) > 2:
+            raise ValueError("a refinement patch may touch at most two components")
         return self
 
 

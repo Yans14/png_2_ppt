@@ -17,5 +17,8 @@ jobs:
           node-version: "20"
           cache: npm
       - run: npm ci
-      - run: pip install -e .
+      - run: pip install -e . build
       - run: npm run test:all
+      - run: python -m build --wheel
+      - run: python scripts/render_compatibility_fixture.py --output /tmp/powerpoint-compatibility.pptx
+      - run: python scripts/validate_powerpoint.py /tmp/powerpoint-compatibility.pptx --mode off

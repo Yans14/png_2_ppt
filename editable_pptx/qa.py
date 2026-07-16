@@ -13,7 +13,7 @@ from pathlib import Path
 import numpy as np
 from PIL import Image, ImageColor, ImageFilter
 
-from .models import SlideSpec
+from .models import LineElement, SlideSpec
 
 
 class QualityCheckError(RuntimeError):
@@ -93,6 +93,7 @@ def compare_images(
     rendered_path: str | Path,
     *,
     background_color: str = "#FFFFFF",
+    spec: SlideSpec | None = None,
 ) -> dict[str, object]:
     with Image.open(reference_path) as reference_image, Image.open(rendered_path) as rendered_image:
         reference = reference_image.convert("RGB")
@@ -209,6 +210,20 @@ def compare_images(
                 "width": int(max_x - min_x + 1),
                 "height": int(max_y - min_y + 1),
             }
+        object_regions = _object_region_metrics(
+            spec,
+            reference_mask=reference_mask,
+            rendered_mask=rendered_mask,
+            reference_edge_mask=reference_edge_mask,
+            rendered_edge_mask=rendered_edge_mask,
+            difference_map=difference_map,
+        )
+        significant_object_regions = [
+            item
+            for item in object_regions
+            if float(item["high_error_fraction"]) >= 0.08
+            or float(item["pixel_mae"]) >= 0.06
+        ]
         return {
             "reference_size": list(reference.size),
             "rendered_size": list(original_render_size),
@@ -230,7 +245,108 @@ def compare_images(
             "foreground_comparison_pixels": int(eroded_common.sum()),
             "worst_regions": worst_regions,
             "high_error_bbox": high_error_bbox,
+            "object_regions": object_regions,
+            "worst_object_similarity": (
+                object_regions[0]["similarity_score"] if object_regions else 1.0
+            ),
+            "worst_significant_object_similarity": (
+                significant_object_regions[0]["similarity_score"]
+                if significant_object_regions
+                else 1.0
+            ),
         }
+
+
+def _object_region_metrics(
+    spec: SlideSpec | None,
+    *,
+    reference_mask: np.ndarray,
+    rendered_mask: np.ndarray,
+    reference_edge_mask: np.ndarray,
+    rendered_edge_mask: np.ndarray,
+    difference_map: np.ndarray,
+) -> list[dict[str, object]]:
+    """Score each editable top-level object in its own target-image region.
+
+    The global metric remains the release regression score.  These local scores identify
+    which stable object IDs should be corrected, preventing a visually dominant background
+    from hiding a malformed icon, connector, or text box.
+    """
+
+    if spec is None:
+        return []
+    height, width = difference_map.shape
+    results: list[dict[str, object]] = []
+    for element in spec.elements:
+        if isinstance(element, LineElement):
+            stroke_padding = max(3.0, float(element.stroke.width_px) * 2.0)
+            x0 = min(element.x1, element.x2) - stroke_padding
+            y0 = min(element.y1, element.y2) - stroke_padding
+            x1 = max(element.x1, element.x2) + stroke_padding
+            y1 = max(element.y1, element.y2) + stroke_padding
+        else:
+            x0 = element.bounds.x
+            y0 = element.bounds.y
+            x1 = x0 + element.bounds.width
+            y1 = y0 + element.bounds.height
+        left = max(0, min(width, int(math.floor(x0))))
+        top = max(0, min(height, int(math.floor(y0))))
+        right = max(left + 1, min(width, int(math.ceil(x1))))
+        bottom = max(top + 1, min(height, int(math.ceil(y1))))
+        if left >= width or top >= height:
+            continue
+
+        reference_region = reference_mask[top:bottom, left:right]
+        rendered_region = rendered_mask[top:bottom, left:right]
+        reference_edges = reference_edge_mask[top:bottom, left:right]
+        rendered_edges = rendered_edge_mask[top:bottom, left:right]
+        region_difference = difference_map[top:bottom, left:right]
+        union = int(np.logical_or(reference_region, rendered_region).sum())
+        mask_iou = (
+            float(np.logical_and(reference_region, rendered_region).sum() / union)
+            if union
+            else 1.0
+        )
+        edge_precision, edge_recall, edge_f1 = _tolerant_edge_f1(
+            reference_edges,
+            rendered_edges,
+        )
+        mae = float(region_difference.mean())
+        color_score = max(0.0, 1.0 - mae * 2.4)
+        structural_score = 0.72 * edge_f1 + 0.28 * mask_iou
+        similarity = 0.70 * structural_score + 0.30 * color_score
+        results.append(
+            {
+                "id": element.id,
+                "name": element.name,
+                "kind": element.kind,
+                "bounds": {
+                    "x": left,
+                    "y": top,
+                    "width": right - left,
+                    "height": bottom - top,
+                },
+                "pixel_mae": round(mae, 6),
+                "edge_precision": round(edge_precision, 6),
+                "edge_recall": round(edge_recall, 6),
+                "edge_f1": round(edge_f1, 6),
+                "foreground_mask_iou": round(mask_iou, 6),
+                "structural_score": round(structural_score, 6),
+                "similarity_score": round(similarity, 6),
+                "high_error_fraction": round(float((region_difference >= 0.15).mean()), 6),
+                "error_mass": round(
+                    mae * float((right - left) * (bottom - top)),
+                    3,
+                ),
+            }
+        )
+    results.sort(
+        key=lambda item: (
+            float(item["similarity_score"]),
+            -float(item["high_error_fraction"]),
+        )
+    )
+    return results
 
 
 def _foreground_mask(

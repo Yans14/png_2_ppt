@@ -202,6 +202,23 @@ class EditablePptxTests(unittest.TestCase):
         self.assertEqual(refined.elements[0].text, "Improved title")
         self.assertEqual(refined.reconstruction_notes, spec.reconstruction_notes)
 
+    def test_refinement_patch_rejects_more_than_four_touched_elements(self) -> None:
+        element = arrow_spec().elements[0]
+        payload = {
+            "background": None,
+            "upsert_components": [],
+            "remove_component_ids": [],
+            "upsert_elements": [
+                element.model_copy(update={"id": f"element-{index}"})
+                for index in range(5)
+            ],
+            "remove_element_ids": [],
+            "reconstruction_notes": None,
+        }
+
+        with self.assertRaisesRegex(ValueError, "at most 4 items"):
+            SlidePatch.model_validate(payload)
+
     def test_slide_score_prefers_matching_geometry_over_matching_color(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
