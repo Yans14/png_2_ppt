@@ -18,3 +18,29 @@ coverage/
 .pytest_cache/
 .mypy_cache/
 *.pptx.inspect.ndjson
+
+# Local generated artifacts
+*.pptx
+*.pdf
+*.png
+*.jpg
+*.jpeg
+*.webp
+*.zip
+*.whl
+*.log
+*.tmp
+.cache/
+.pytest_cache/
+
+# IDE and OS metadata
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Local benchmark and model outputs
+reports/
+artifacts/
+tmp/
+candidate_specs/
