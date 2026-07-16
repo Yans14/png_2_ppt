@@ -97,6 +97,32 @@ class OpenAIResponsesTests(unittest.TestCase):
             )
 
     @patch("editable_pptx.openai_responses.urllib.request.urlopen")
+    def test_invalid_structured_output_is_regenerated_with_feedback(self, urlopen) -> None:
+        urlopen.side_effect = [
+            FakeHTTPResponse({"status": "completed", "output_text": '{"wrong":"field"}'}),
+            FakeHTTPResponse({"status": "completed", "output_text": '{"answer":"fixed"}'}),
+        ]
+
+        result = request_structured_response(
+            ExamplePayload,
+            schema_name="example_payload",
+            system_text="Return an answer.",
+            user_text="Go.",
+            image_paths=[],
+            model="gpt-5.6-luna",
+            api_key="test-key",
+            background=False,
+            max_validation_retries=1,
+        )
+
+        self.assertEqual(result.answer, "fixed")
+        self.assertEqual(urlopen.call_count, 2)
+        retry_request = urlopen.call_args_list[1].args[0]
+        retry_body = json.loads(retry_request.data)
+        retry_text = retry_body["input"][-1]["content"][0]["text"]
+        self.assertIn("previous response failed local schema validation", retry_text)
+
+    @patch("editable_pptx.openai_responses.urllib.request.urlopen")
     def test_insufficient_quota_is_not_retried(self, urlopen) -> None:
         payload = {
             "error": {

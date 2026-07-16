@@ -333,7 +333,11 @@ class SlideSpec(StrictModel):
     source_height: int
     background: FillSpec
     components: list[ComponentSpec]
-    elements: list[ElementSpec]
+    # A component library without a placed top-level element renders a blank
+    # slide.  Requiring one placed element also emits ``minItems: 1`` in the
+    # structured-output schema, preventing the model from returning an
+    # apparently valid but unusable reconstruction.
+    elements: list[ElementSpec] = Field(min_length=1)
     reconstruction_notes: list[str]
 
     @model_validator(mode="after")

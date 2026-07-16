@@ -52,10 +52,27 @@ class BenchmarkRunnerTests(unittest.TestCase):
             "raster_policy": "photos-only",
             "requested_iterations": 1,
             "target_score": 0.93,
+            "audit": {
+                "native_shape_objects": 1,
+                "picture_objects": 0,
+                "flattened_slide": False,
+                "canvas_overflow_count": 0,
+            },
         }
         self.assertTrue(RUNNER.cache_matches(report, args))
         report["metric_version"] = "old"
         self.assertFalse(RUNNER.cache_matches(report, args))
+
+    def test_blank_report_never_counts_as_a_valid_cached_reconstruction(self) -> None:
+        report = {
+            "audit": {
+                "native_shape_objects": 0,
+                "picture_objects": 0,
+                "flattened_slide": False,
+                "canvas_overflow_count": 0,
+            }
+        }
+        self.assertFalse(RUNNER.report_meets_editability_contract(report))
 
     def test_targets_are_validated_before_paid_work_starts(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

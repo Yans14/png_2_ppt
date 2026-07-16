@@ -24,6 +24,22 @@ ROOT = Path(__file__).resolve().parents[1]
 COMPLETED_STATUSES = {"success", "cached", "rescored"}
 
 
+def report_meets_editability_contract(report: dict[str, Any]) -> bool:
+    """Reject blank, flattened, overflowing, or otherwise unusable decks."""
+
+    audit = report.get("audit")
+    if not isinstance(audit, dict):
+        return False
+    native_objects = int(audit.get("native_shape_objects", 0)) + int(
+        audit.get("picture_objects", 0)
+    )
+    return (
+        native_objects > 0
+        and audit.get("flattened_slide") is False
+        and int(audit.get("canvas_overflow_count", 0)) == 0
+    )
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--manifest", default=ROOT / "benchmarks" / "manifest.json", type=Path)
@@ -53,6 +69,7 @@ def cache_matches(report: dict[str, Any], args: argparse.Namespace) -> bool:
         and report.get("raster_policy") == "photos-only"
         and report.get("requested_iterations") == args.iterations
         and report.get("target_score") == args.target_score
+        and report_meets_editability_contract(report)
     )
 
 
@@ -153,6 +170,14 @@ def run_case(
             "error": completed.stderr.strip()[-2000:],
         }
     report = json.loads(report_path.read_text(encoding="utf-8"))
+    if not report_meets_editability_contract(report):
+        return {
+            "id": case_id,
+            "status": "invalid_output",
+            "elapsed_seconds": elapsed,
+            "error": "Generated deck failed the native editability contract.",
+            "report": report,
+        }
     status = "rescored" if args.rescore_existing else "success"
     return {"id": case_id, "status": status, "elapsed_seconds": elapsed, "report": report}
 
@@ -263,8 +288,9 @@ def main() -> int:
         ),
         "all_native_editable": bool(completed_rows)
         and all(
-            row["flattened_slide"] is False and row["canvas_overflow_count"] == 0
-            for row in completed_rows
+            report_meets_editability_contract(result.get("report", {}))
+            for result in results
+            if result["status"] in COMPLETED_STATUSES
         ),
         "rows": rows,
         "results": results,

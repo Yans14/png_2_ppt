@@ -1,6 +1,6 @@
 """Public package and evaluation format versions."""
 
-__version__ = "1.0.0"
+__version__ = "1.1.0"
 METRIC_VERSION = "2"
 
 

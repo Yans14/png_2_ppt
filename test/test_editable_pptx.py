@@ -18,6 +18,7 @@ from editable_pptx.models import (
 )
 from editable_pptx.qa import audit_pptx, compare_images
 from editable_pptx.renderer import render_pptx
+from editable_pptx.renderer import _inject_autofit_scales_in_xml
 
 
 def invisible_stroke() -> dict[str, object]:
@@ -97,6 +98,24 @@ def arrow_spec() -> SlideSpec:
 
 
 class EditablePptxTests(unittest.TestCase):
+    def test_autofit_scale_injection_targets_shape_by_stable_name(self) -> None:
+        xml = (
+            '<p:sp><p:nvSpPr><p:cNvPr id="1" name="editable:title"/></p:nvSpPr>'
+            '<p:txBody><a:bodyPr><a:normAutofit/></a:bodyPr></p:txBody></p:sp>'
+            '<p:sp><p:nvSpPr><p:cNvPr id="2" name="editable:body"/></p:nvSpPr>'
+            '<p:txBody><a:bodyPr><a:normAutofit/></a:bodyPr></p:txBody></p:sp>'
+        )
+        updated = _inject_autofit_scales_in_xml(
+            xml,
+            {"editable:title": {"fontScale": "77500", "lnSpcReduction": "19999"}},
+        )
+
+        self.assertIn(
+            '<a:normAutofit fontScale="77500" lnSpcReduction="19999"/>',
+            updated,
+        )
+        self.assertEqual(updated.count("<a:normAutofit/>"), 1)
+
     def test_local_analysis_counts_repeated_horizontal_bars(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             image_path = Path(temp_dir) / "bars.png"
@@ -118,6 +137,20 @@ class EditablePptxTests(unittest.TestCase):
         self.assertNotIn("'oneOf'", serialized)
         self.assertNotIn("'discriminator'", serialized)
         self.assertIn("'anyOf'", serialized)
+
+    def test_slide_spec_rejects_an_unplaced_component_library(self) -> None:
+        payload = arrow_spec().model_dump(mode="json")
+        payload["components"] = [
+            {
+                "id": "unused",
+                "name": "Unused component",
+                "elements": [payload["elements"][1]],
+            }
+        ]
+        payload["elements"] = []
+
+        with self.assertRaisesRegex(ValueError, "at least 1 item"):
+            SlideSpec.model_validate(payload)
 
     def test_path_validation_requires_cubic_controls(self) -> None:
         payload = arrow_spec().model_dump(mode="json")

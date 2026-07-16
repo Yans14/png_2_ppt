@@ -104,6 +104,7 @@ def request_structured_response(
     max_output_tokens: int = 32000,
     reasoning_effort: str = "high",
     max_retries: int = 2,
+    max_validation_retries: int = 1,
     background: bool = True,
     poll_interval_seconds: float = 2.0,
 ) -> ModelT:
@@ -149,57 +150,70 @@ def request_structured_response(
     }
 
     deadline = time.monotonic() + timeout_seconds
-    payload = _request_json_with_retries(
-        "https://api.openai.com/v1/responses",
-        api_key=resolved_key,
-        data=json.dumps(body).encode("utf-8"),
-        method="POST",
-        deadline=deadline,
-        max_retries=max_retries,
-    )
-    while background and payload.get("status") in {"queued", "in_progress"}:
-        response_id = payload.get("id")
-        if not isinstance(response_id, str) or not response_id:
-            raise OpenAIResponsesError("Background response did not include an id")
-        remaining = deadline - time.monotonic()
-        if remaining <= 0:
-            raise OpenAIResponsesError(
-                f"OpenAI background response timed out after {timeout_seconds}s"
+    validation_feedback = ""
+    for validation_attempt in range(max_validation_retries + 1):
+        if validation_feedback:
+            body["input"][-1]["content"][0]["text"] = (
+                user_text
+                + "\n\nYour previous response failed local schema validation. Regenerate the "
+                "complete object and correct every reported issue:\n"
+                + validation_feedback[:2000]
             )
-        time.sleep(min(max(0.1, poll_interval_seconds), remaining))
         payload = _request_json_with_retries(
-            "https://api.openai.com/v1/responses/" + urllib.parse.quote(response_id, safe=""),
+            "https://api.openai.com/v1/responses",
             api_key=resolved_key,
-            data=None,
-            method="GET",
+            data=json.dumps(body).encode("utf-8"),
+            method="POST",
             deadline=deadline,
             max_retries=max_retries,
         )
+        while background and payload.get("status") in {"queued", "in_progress"}:
+            response_id = payload.get("id")
+            if not isinstance(response_id, str) or not response_id:
+                raise OpenAIResponsesError("Background response did not include an id")
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise OpenAIResponsesError(
+                    f"OpenAI background response timed out after {timeout_seconds}s"
+                )
+            time.sleep(min(max(0.1, poll_interval_seconds), remaining))
+            payload = _request_json_with_retries(
+                "https://api.openai.com/v1/responses/"
+                + urllib.parse.quote(response_id, safe=""),
+                api_key=resolved_key,
+                data=None,
+                method="GET",
+                deadline=deadline,
+                max_retries=max_retries,
+            )
 
-    if payload.get("status") in {"failed", "cancelled"}:
-        message = (
-            payload.get("error", {}).get("message")
-            if isinstance(payload.get("error"), dict)
-            else None
-        )
-        raise OpenAIResponsesError(
-            f"OpenAI response {payload.get('status')}: {message or 'unknown error'}"
-        )
-    if payload.get("status") == "incomplete":
-        reason = payload.get("incomplete_details", {}).get("reason", "unknown reason")
-        raise OpenAIResponsesError(
-            f"OpenAI response was incomplete ({reason}); increase max output tokens"
-        )
+        if payload.get("status") in {"failed", "cancelled"}:
+            message = (
+                payload.get("error", {}).get("message")
+                if isinstance(payload.get("error"), dict)
+                else None
+            )
+            raise OpenAIResponsesError(
+                f"OpenAI response {payload.get('status')}: {message or 'unknown error'}"
+            )
+        if payload.get("status") == "incomplete":
+            reason = payload.get("incomplete_details", {}).get("reason", "unknown reason")
+            raise OpenAIResponsesError(
+                f"OpenAI response was incomplete ({reason}); increase max output tokens"
+            )
 
-    text = _response_text(payload)
-    if not text:
-        raise OpenAIResponsesError("OpenAI response contained no structured output text")
-    try:
-        return response_type.model_validate_json(text)
-    except ValidationError as error:
-        raise OpenAIResponsesError(f"OpenAI returned invalid structured output: {error}") from error
-    except json.JSONDecodeError as error:
-        raise OpenAIResponsesError(f"OpenAI returned invalid JSON: {error}") from error
+        text = _response_text(payload)
+        if not text:
+            raise OpenAIResponsesError("OpenAI response contained no structured output text")
+        try:
+            return response_type.model_validate_json(text)
+        except (ValidationError, json.JSONDecodeError) as error:
+            if validation_attempt >= max_validation_retries:
+                label = "structured output" if isinstance(error, ValidationError) else "JSON"
+                raise OpenAIResponsesError(f"OpenAI returned invalid {label}: {error}") from error
+            validation_feedback = str(error)
+
+    raise OpenAIResponsesError("OpenAI response failed structured-output validation")
 
 
 def _request_json_with_retries(

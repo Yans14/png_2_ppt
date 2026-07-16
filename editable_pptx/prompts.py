@@ -70,7 +70,11 @@ Schema mechanics:
 def initial_user_prompt(image_facts: dict[str, object], raster_policy: str) -> str:
     policy_text = {
         "none": "No raster image elements allowed. Approximate all artwork with editable vectors.",
-        "photos-only": "Raster image elements allowed only for genuine photographic/textured regions.",
+        "photos-only": (
+            "Raster image elements are allowed only for genuine photographic/textured regions. "
+            "content_type=raster_illustration is invalid under this policy and will be rejected. "
+            "Rebuild every flat illustration as editable shapes and vector paths, even when it is complex."
+        ),
         "allow": "Raster regions allowed when truly needed, but full-slide flattening remains forbidden.",
     }[raster_policy]
     return (
@@ -96,7 +100,11 @@ def refinement_patch_prompt(
         f"Raster policy: {raster_policy}.\n"
         f"Pixel facts: {json.dumps(image_facts, ensure_ascii=False)}\n"
         f"Measured differences: {json.dumps(metrics, ensure_ascii=False)}\n"
-        "Focus on the five worst regions and the largest structural errors: paths, text boxes, "
-        "spacing, colors, and z-order. Do not churn IDs or rewrite already-correct objects.\n"
+        "Before choosing edits, compare object topology and silhouettes directly in both images. "
+        "A circle, rounded rectangle, chevron, arrow, or organic path must remain the same shape "
+        "class even when its pixel score is already high. Treat wrong shape class, connector "
+        "direction, and faceted curves as hard structural errors. Then focus on the five worst "
+        "regions and the largest remaining errors: paths, text boxes, spacing, colors, and z-order. "
+        "Do not churn IDs or rewrite already-correct objects.\n"
         f"Current spec: {json.dumps(current_spec, ensure_ascii=False)}"
     )

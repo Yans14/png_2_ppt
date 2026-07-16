@@ -5,15 +5,22 @@ objects. Text stays text; bars, icons, diagrams, arrows, lines, gradients, and f
 curves become PowerPoint shapes. A genuine photo may remain as a separate replaceable
 picture, but the tool rejects using the complete screenshot as a hidden background.
 
-The vision pipeline uses GPT‑5.5 by default and follows a measured correction loop:
+The vision pipeline uses GPT‑5.5 by default, accepts a cheaper model through `--model`,
+and follows a measured correction loop:
 
 1. local image analysis extracts dimensions, colors, and repeated horizontal geometry;
-2. GPT‑5.5 returns a strict object graph with stable IDs;
+2. the selected vision model returns a strict object graph with stable IDs;
 3. JavaScript renders a real `.pptx` with PptxGenJS;
 4. LibreOffice renders the PPTX back to an image;
 5. Python scores structure (70%) and color/pixels (30%), including the five worst regions;
-6. if the target is not reached, GPT‑5.5 returns only a minimal patch;
+6. if the target is not reached, the model returns only a minimal patch;
 7. a candidate becomes the new base only when its measured score improves.
+
+Invalid structured responses are regenerated once with the exact local validation errors.
+The corrector also treats object topology—such as circle versus rounded rectangle or a
+faceted versus smooth curve—as a hard structural requirement. The renderer materializes
+PowerPoint text auto-fit scales so text remains stable when another tool resizes or inspects
+the slide.
 
 This is shape reconstruction, not screenshot tracing. The objective is an editable slide
 with the same visual structure, rather than a pixel-perfect raster copy.
@@ -53,10 +60,16 @@ and `.env` is ignored by Git.
 image-to-editable-pptx \
   --input "/absolute/path/to/slide.png" \
   --output "./out/slide-editable.pptx" \
-  --model gpt-5.5 \
+  --model gpt-5.6-luna \
   --iterations 1 \
   --raster-policy photos-only
 ```
+
+`gpt-5.6-luna` is the validated budget profile. OpenAI describes it as the GPT‑5.6 model
+for cost-sensitive, high-volume workloads; it supports image input and structured outputs.
+Use `gpt-5.6-terra` for a higher-quality/cost balance, or omit `--model` to retain the
+GPT‑5.5 quality default. See the official [model guidance](https://developers.openai.com/api/docs/guides/latest-model)
+and [pricing](https://developers.openai.com/api/docs/pricing).
 
 Outputs:
 
@@ -104,7 +117,7 @@ are downloaded into an ignored cache; third-party PDFs are not committed.
 
 ```bash
 npm run benchmark:fetch
-npm run benchmark -- --model gpt-5.5 --iterations 1 --jobs 2
+npm run benchmark -- --model gpt-5.6-luna --iterations 1 --jobs 2
 ```
 
 After changing only the renderer or metrics, rescore existing object graphs without any API
@@ -148,10 +161,12 @@ npm run build:renderer
 npm run test:all
 ```
 
-Tests validate schemas, correction patches, component transforms, reversed-line geometry,
-native cubic curves, native gradients, absence of hidden full-slide rasters, background API
-polling, and structure-weighted scoring. The generated report also counts native shapes,
-text runs, picture objects, media files, gradients, and Bézier segments.
+Tests validate schemas, non-empty slide graphs, semantic-response regeneration, correction
+patches, component transforms, reversed-line geometry, native cubic curves, native gradients,
+stable text auto-fit, absence of hidden full-slide rasters, background API polling, and
+structure-weighted scoring. The generated report also counts native shapes, text runs,
+picture objects, media files, gradients, and Bézier segments. Blank or otherwise unusable
+PPTX files never count as successful benchmark cases.
 
 ## Limitations
 
