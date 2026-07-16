@@ -1,0 +1,70 @@
+{
+  "version": 1,
+  "canvas": {"width": 1280, "height": 720},
+  "sources": {
+    "world-bank-agrifood": {
+      "url": "https://thedocs.worldbank.org/en/doc/e5058a942964a3a9e65d55d845e694e0-0360012021/original/17June2021-Digital-Transformation-Japan-Public-Event-GE.pdf",
+      "landing_page": "https://www.worldbank.org/en/events/2021/06/18/whats-cooking-digital-transformation-of-the-agrifood-system",
+      "license_note": "Public World Bank presentation; retained only as an evaluation download."
+    },
+    "oecd-digital-government": {
+      "url": "https://www.oecd.org/content/dam/oecd/en/publications/support-materials/2026/06/digital-government-outlook_4585678e/Digital-government-outlook-key-findings.pdf",
+      "landing_page": "https://www.oecd.org/en/blogs/2026/06/slides-from-the-launch-of-digital-government-outlook-2026.html",
+      "license_note": "Public OECD presentation; retained only as an evaluation download."
+    },
+    "world-bank-ida": {
+      "url": "https://thedocs.worldbank.org/en/doc/9586d703f1fef4a864b6f5add9f75bf9-0410012024/original/IDA-in-Focus-Financing-Model-2-7-2024.pdf",
+      "landing_page": "https://www.worldbank.org/en/events/2024/03/12/ida-in-focus",
+      "license_note": "Public World Bank presentation; retained only as an evaluation download."
+    },
+    "world-bank-indonesia": {
+      "url": "https://thedocs.worldbank.org/en/doc/314f6ce40311342e43840f037fb15d10-0070012021/original/World-Bank-Indonesia-Digital-Report-Presentation.pdf",
+      "landing_page": "https://www.worldbank.org/en/country/indonesia/publication/beyond-unicorns-harnessing-digital-technologies-for-inclusion-in-indonesia",
+      "license_note": "Public World Bank presentation; retained only as an evaluation download."
+    }
+  },
+  "cases": [
+    {
+      "id": "agrifood-value-chain",
+      "source": "world-bank-agrifood",
+      "page": 3,
+      "category": "illustrated process",
+      "difficulty": "high"
+    },
+    {
+      "id": "agrifood-enablers-pyramid",
+      "source": "world-bank-agrifood",
+      "page": 7,
+      "category": "pyramid diagram",
+      "difficulty": "medium"
+    },
+    {
+      "id": "oecd-dpi-dashboard",
+      "source": "oecd-digital-government",
+      "page": 9,
+      "category": "chart and annotation",
+      "difficulty": "high"
+    },
+    {
+      "id": "ida-hybrid-model",
+      "source": "world-bank-ida",
+      "page": 3,
+      "category": "financial flow diagram",
+      "difficulty": "high"
+    },
+    {
+      "id": "ida-balance-sheet",
+      "source": "world-bank-ida",
+      "page": 6,
+      "category": "stacked diagram",
+      "difficulty": "medium"
+    },
+    {
+      "id": "indonesia-ride-hailing",
+      "source": "world-bank-indonesia",
+      "page": 17,
+      "category": "photo and typography",
+      "difficulty": "high"
+    }
+  ]
+}

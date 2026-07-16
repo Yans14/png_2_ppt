@@ -1,0 +1,2 @@
+# Kept for environments that install from requirements files.
+-e .

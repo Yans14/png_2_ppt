@@ -1,0 +1,24 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 664 630">
+  <defs>
+    <linearGradient id="growth" x1="0%" y1="100%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#EFF6F8" stop-opacity="0.18"/>
+      <stop offset="30%" stop-color="#CDE0E7"/>
+      <stop offset="50%" stop-color="#7DACBC"/>
+      <stop offset="69%" stop-color="#2C7792"/>
+      <stop offset="100%" stop-color="#146687"/>
+    </linearGradient>
+  </defs>
+  <path
+    id="curved-growth-arrow"
+    aria-label="Curved growth arrow"
+    d="M 0 630
+       C 110 160, 580 189, 583 30
+       L 658 0
+       L 664 67
+       L 640 50
+       L 620 76
+       C 450 239, 165 240, 85 630
+       Z"
+    fill="url(#growth)"
+    stroke="none"/>
+</svg>

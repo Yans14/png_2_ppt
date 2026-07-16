@@ -1,0 +1,39 @@
+{
+  "name": "editable-pptx-reconstructor",
+  "version": "1.0.0",
+  "private": true,
+  "main": "src/render-image-spec.js",
+  "scripts": {
+    "reconstruct": "python3 -m editable_pptx",
+    "convert:layout": "node src/convert.js",
+    "convert:figure": "python3 -m editable_pptx.shape_cli",
+    "build:renderer": "ncc build src/render-image-spec.js -o editable_pptx/js -m --license licenses.txt --no-cache",
+    "render:image-spec": "node src/render-image-spec.js",
+    "benchmark:fetch": "python3 scripts/fetch_benchmarks.py",
+    "benchmark": "python3 scripts/run_benchmarks.py",
+    "test": "node --test",
+    "test:python": "python3 -m unittest discover -s test -p 'test_*.py' -v",
+    "test:all": "npm test && npm run test:python"
+  },
+  "keywords": [
+    "powerpoint",
+    "pptx",
+    "editable",
+    "reconstruction",
+    "vision"
+  ],
+  "license": "MIT",
+  "description": "Reconstruct slide images and geometric artwork as native editable PowerPoint objects",
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "fast-xml-parser": "^5.10.0",
+    "jszip": "^3.10.1",
+    "pptxgenjs": "^4.0.1",
+    "yargs": "^18.0.0"
+  },
+  "devDependencies": {
+    "@vercel/ncc": "^0.44.1"
+  }
+}

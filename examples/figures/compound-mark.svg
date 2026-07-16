@@ -1,0 +1,25 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 400 400">
+  <defs>
+    <linearGradient id="ring" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#0A6B8B"/>
+      <stop offset="100%" stop-color="#4DB2C8"/>
+    </linearGradient>
+  </defs>
+  <path
+    id="editable-ring"
+    d="M 200 24
+       A 176 176 0 1 1 199.9 24
+       Z
+       M 200 112
+       A 88 88 0 1 0 200.1 112
+       Z"
+    fill="url(#ring)"
+    fill-rule="evenodd"/>
+  <path
+    id="editable-star"
+    d="M 200 78 L 231 158 L 318 163 L 250 218 L 272 302
+       L 200 255 L 128 302 L 150 218 L 82 163 L 169 158 Z"
+    fill="#FFFFFF"
+    stroke="#FFFFFF"
+    stroke-width="4"/>
+</svg>
