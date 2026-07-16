@@ -15,8 +15,13 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Any
 
+from PIL import Image
+
+from editable_pptx.version import METRIC_VERSION, __version__
+
 
 ROOT = Path(__file__).resolve().parents[1]
+COMPLETED_STATUSES = {"success", "cached", "rescored"}
 
 
 def parse_args() -> argparse.Namespace:
@@ -32,7 +37,23 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--jobs", default=1, type=int)
     parser.add_argument("--case", action="append", dest="cases")
     parser.add_argument("--force", action="store_true")
+    parser.add_argument(
+        "--rescore-existing",
+        action="store_true",
+        help="Render existing specs with the current engine without making API calls",
+    )
     return parser.parse_args()
+
+
+def cache_matches(report: dict[str, Any], args: argparse.Namespace) -> bool:
+    return (
+        report.get("engine_version") == __version__
+        and report.get("metric_version") == METRIC_VERSION
+        and report.get("model") == args.model
+        and report.get("raster_policy") == "photos-only"
+        and report.get("requested_iterations") == args.iterations
+        and report.get("target_score") == args.target_score
+    )
 
 
 def run_case(
@@ -51,9 +72,23 @@ def run_case(
     case_dir = args.results_dir / case_id
     case_dir.mkdir(parents=True, exist_ok=True)
     report_path = case_dir / "report.json"
-    if report_path.exists() and not args.force:
+    spec_path = case_dir / "spec.json"
+    if args.rescore_existing and not spec_path.exists():
+        return {
+            "id": case_id,
+            "status": "missing_spec",
+            "elapsed_seconds": 0,
+            "error": "No existing spec is available for offline rescoring.",
+        }
+    if report_path.exists() and not args.force and not args.rescore_existing:
         report = json.loads(report_path.read_text(encoding="utf-8"))
-        return {"id": case_id, "status": "cached", "elapsed_seconds": 0, "report": report}
+        if cache_matches(report, args):
+            return {
+                "id": case_id,
+                "status": "cached",
+                "elapsed_seconds": 0,
+                "report": report,
+            }
 
     command = [
         sys.executable,
@@ -64,7 +99,7 @@ def run_case(
         "--output",
         str(case_dir / "reconstruction.pptx"),
         "--spec-out",
-        str(case_dir / "spec.json"),
+        str(spec_path),
         "--report",
         str(report_path),
         "--workdir",
@@ -82,6 +117,8 @@ def run_case(
         "--max-output-tokens",
         str(args.max_output_tokens),
     ]
+    if args.rescore_existing:
+        command.extend(["--spec-in", str(spec_path)])
     environment = os.environ.copy()
     environment["PYTHONPATH"] = str(ROOT) + os.pathsep + environment.get("PYTHONPATH", "")
     started = time.monotonic()
@@ -109,7 +146,8 @@ def run_case(
             "error": completed.stderr.strip()[-2000:],
         }
     report = json.loads(report_path.read_text(encoding="utf-8"))
-    return {"id": case_id, "status": "success", "elapsed_seconds": elapsed, "report": report}
+    status = "rescored" if args.rescore_existing else "success"
+    return {"id": case_id, "status": status, "elapsed_seconds": elapsed, "report": report}
 
 
 def compact_row(result: dict[str, Any]) -> dict[str, Any]:
@@ -132,8 +170,47 @@ def compact_row(result: dict[str, Any]) -> dict[str, Any]:
         "native_text_runs": audit.get("native_text_runs", ""),
         "picture_objects": audit.get("picture_objects", ""),
         "flattened_slide": audit.get("flattened_slide", ""),
+        "canvas_overflow_count": audit.get("canvas_overflow_count", ""),
         "iterations": len(report.get("iterations", [])) if report else "",
     }
+
+
+def summary_stem(
+    selected_cases: list[str] | None,
+    *,
+    rescore_existing: bool = False,
+) -> str:
+    prefix = "summary-rescore" if rescore_existing else "summary"
+    if not selected_cases:
+        return prefix
+    normalized = "-".join(sorted(selected_cases))
+    return prefix + "-" + normalized
+
+
+def validate_targets(
+    cases: list[dict[str, Any]],
+    *,
+    targets_dir: Path,
+    expected_width: int,
+    expected_height: int,
+) -> None:
+    errors: list[str] = []
+    for case in cases:
+        target = targets_dir / f"{case['id']}.png"
+        if not target.exists():
+            errors.append(f"{case['id']}: missing target {target}")
+            continue
+        try:
+            with Image.open(target) as image:
+                if image.size != (expected_width, expected_height):
+                    errors.append(
+                        f"{case['id']}: expected {expected_width}x{expected_height}, "
+                        f"found {image.width}x{image.height}"
+                    )
+        except OSError as error:
+            errors.append(f"{case['id']}: unreadable target ({error})")
+    if errors:
+        raise SystemExit("Benchmark target validation failed:\n" + "\n".join(errors))
 
 
 def main() -> int:
@@ -146,6 +223,12 @@ def main() -> int:
     missing = selected - {case["id"] for case in cases}
     if missing:
         raise SystemExit(f"unknown benchmark case(s): {', '.join(sorted(missing))}")
+    validate_targets(
+        cases,
+        targets_dir=args.targets_dir,
+        expected_width=int(manifest["canvas"]["width"]),
+        expected_height=int(manifest["canvas"]["height"]),
+    )
     args.results_dir.mkdir(parents=True, exist_ok=True)
 
     results: list[dict[str, Any]] = []
@@ -162,22 +245,30 @@ def main() -> int:
     results.sort(key=lambda item: item["id"])
     rows = [compact_row(result) for result in results]
     successful_scores = [float(row["similarity_score"]) for row in rows if row["similarity_score"] != ""]
+    completed_rows = [row for row in rows if row["status"] in COMPLETED_STATUSES]
     summary = {
         "model": args.model,
         "iterations": args.iterations,
         "case_count": len(results),
-        "success_count": sum(result["status"] in {"success", "cached"} for result in results),
+        "success_count": sum(result["status"] in COMPLETED_STATUSES for result in results),
         "mean_similarity_score": (
             round(sum(successful_scores) / len(successful_scores), 6) if successful_scores else None
         ),
-        "all_native_editable": all(row["flattened_slide"] is False for row in rows if row["status"] != "failed"),
+        "all_native_editable": bool(completed_rows)
+        and all(
+            row["flattened_slide"] is False and row["canvas_overflow_count"] == 0
+            for row in completed_rows
+        ),
         "rows": rows,
         "results": results,
     }
-    (args.results_dir / "summary.json").write_text(
+    output_stem = summary_stem(args.cases, rescore_existing=args.rescore_existing)
+    (args.results_dir / f"{output_stem}.json").write_text(
         json.dumps(summary, indent=2, ensure_ascii=False) + "\n", encoding="utf-8"
     )
-    with (args.results_dir / "summary.csv").open("w", newline="", encoding="utf-8") as handle:
+    with (args.results_dir / f"{output_stem}.csv").open(
+        "w", newline="", encoding="utf-8"
+    ) as handle:
         writer = csv.DictWriter(handle, fieldnames=list(rows[0]) if rows else ["id", "status"])
         writer.writeheader()
         writer.writerows(rows)

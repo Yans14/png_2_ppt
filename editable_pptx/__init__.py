@@ -5,6 +5,7 @@ from .figure_optimizer import run_target_optimizer
 from .figure_refinement import FigureOptimizationAdvice, FigureReview
 from .models import SlideSpec
 from .pptx_shape_replace import replace_shape_geometry
+from .version import __version__
 
 __all__ = [
     "FigureConversionOptions",
@@ -17,5 +18,3 @@ __all__ = [
     "replace_shape_geometry",
     "run_target_optimizer",
 ]
-
-__version__ = "1.0.0"

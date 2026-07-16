@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 from typing import Annotated, Literal, Union
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
@@ -493,6 +494,7 @@ def clamp_slide_spec(spec: SlideSpec) -> SlideSpec:
             continue
         new_width = new_right - new_x
         new_height = new_bottom - new_y
+        element_changed = False
         if (new_x, new_y, new_width, new_height) != (old_x, old_y, old_width, old_height):
             if element["kind"] == "image":
                 source_region = element["source_region"]
@@ -515,6 +517,47 @@ def clamp_slide_spec(spec: SlideSpec) -> SlideSpec:
             bounds.update(
                 {"x": new_x, "y": new_y, "width": new_width, "height": new_height}
             )
+            element_changed = True
+
+        rotation = float(element.get("rotation_deg", 0.0) or 0.0)
+        if rotation:
+            radians = math.radians(rotation)
+            width = float(bounds["width"])
+            height = float(bounds["height"])
+            rotated_width = abs(width * math.cos(radians)) + abs(
+                height * math.sin(radians)
+            )
+            rotated_height = abs(width * math.sin(radians)) + abs(
+                height * math.cos(radians)
+            )
+            center_x = float(bounds["x"]) + width / 2
+            center_y = float(bounds["y"]) + height / 2
+            fit_scale = min(
+                1.0,
+                spec.source_width / rotated_width,
+                spec.source_height / rotated_height,
+            )
+            if fit_scale < 1.0:
+                width *= fit_scale
+                height *= fit_scale
+                bounds["width"] = width
+                bounds["height"] = height
+                bounds["x"] = center_x - width / 2
+                bounds["y"] = center_y - height / 2
+                rotated_width *= fit_scale
+                rotated_height *= fit_scale
+                element_changed = True
+            left = center_x - rotated_width / 2
+            right = center_x + rotated_width / 2
+            top = center_y - rotated_height / 2
+            bottom = center_y + rotated_height / 2
+            shift_x = -left if left < 0 else min(0.0, spec.source_width - right)
+            shift_y = -top if top < 0 else min(0.0, spec.source_height - bottom)
+            if shift_x or shift_y:
+                bounds["x"] = float(bounds["x"]) + shift_x
+                bounds["y"] = float(bounds["y"]) + shift_y
+                element_changed = True
+        if element_changed:
             changed_ids.append(str(element["id"]))
         retained.append(element)
     payload["elements"] = retained

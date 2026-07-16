@@ -12,6 +12,7 @@ from .models import ImageElement, SlideSpec, clamp_slide_spec
 from .openai_vision import OpenAIReconstructionError, reconstruct_slide, refine_slide
 from .qa import QualityCheckError, audit_pptx, compare_images, render_first_slide, write_report
 from .renderer import RenderError, render_pptx
+from .version import METRIC_VERSION, __version__
 
 
 class ConversionError(RuntimeError):
@@ -183,9 +184,13 @@ def convert(args: argparse.Namespace) -> dict[str, object]:
         _save_spec(best_spec, spec_path)
         final_audit = audit_pptx(output, best_spec)
         report = {
+            "engine_version": __version__,
+            "metric_version": METRIC_VERSION,
             "input": str(source),
             "output": str(output),
             "model": args.model,
+            "requested_iterations": args.iterations,
+            "target_score": args.target_score,
             "raster_policy": args.raster_policy,
             "image_facts": facts_dict,
             "best_metrics": best_metrics,

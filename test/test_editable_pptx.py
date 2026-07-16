@@ -243,6 +243,42 @@ class EditablePptxTests(unittest.TestCase):
         self.assertEqual((bounds.x, bounds.y, bounds.width, bounds.height), (900, 0, 60, 70))
         self.assertIn("title", clamped.reconstruction_notes[-1])
 
+    def test_rotated_elements_are_translated_inside_the_canvas(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            payload = arrow_spec().model_dump(mode="json")
+            payload["elements"][0]["bounds"] = {
+                "x": 900,
+                "y": 20,
+                "width": 60,
+                "height": 80,
+            }
+            payload["elements"][0]["rotation_deg"] = 30
+            clamped = clamp_slide_spec(SlideSpec.model_validate(payload))
+            output = Path(temp_dir) / "rotated.pptx"
+            render_pptx(clamped, output)
+
+            audit = audit_pptx(output, clamped)
+
+            self.assertEqual(audit["canvas_overflow_count"], 0)
+
+    def test_large_rotated_elements_are_scaled_inside_the_canvas(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            payload = arrow_spec().model_dump(mode="json")
+            payload["elements"][0]["bounds"] = {
+                "x": 0,
+                "y": 0,
+                "width": 960,
+                "height": 540,
+            }
+            payload["elements"][0]["rotation_deg"] = 45
+            clamped = clamp_slide_spec(SlideSpec.model_validate(payload))
+            output = Path(temp_dir) / "large-rotated.pptx"
+            render_pptx(clamped, output)
+
+            audit = audit_pptx(output, clamped)
+
+            self.assertEqual(audit["canvas_overflow_count"], 0)
+
     def test_renderer_writes_native_cubic_gradient_and_text(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             output = Path(temp_dir) / "arrow.pptx"
@@ -254,12 +290,31 @@ class EditablePptxTests(unittest.TestCase):
             self.assertEqual(audit["picture_objects"], 0)
             self.assertEqual(audit["media_files"], 0)
             self.assertFalse(audit["flattened_slide"])
+            self.assertEqual(audit["canvas_overflow_count"], 0)
 
             with zipfile.ZipFile(output) as archive:
                 xml = archive.read("ppt/slides/slide1.xml").decode("utf-8")
             self.assertIn("Editable curved arrow", xml)
             self.assertIn("<a:cubicBezTo>", xml)
             self.assertIn("<a:gradFill", xml)
+
+    def test_ooxml_audit_detects_canvas_overflow(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            payload = arrow_spec().model_dump(mode="json")
+            payload["elements"][0]["bounds"] = {
+                "x": 930,
+                "y": 20,
+                "width": 100,
+                "height": 40,
+            }
+            spec = SlideSpec.model_validate(payload)
+            output = Path(temp_dir) / "overflow.pptx"
+            render_pptx(spec, output)
+
+            audit = audit_pptx(output, spec)
+
+            self.assertGreaterEqual(audit["canvas_overflow_count"], 1)
+            self.assertIn("editable:title", str(audit["canvas_overflow_objects"]))
 
 
 if __name__ == "__main__":

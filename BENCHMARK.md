@@ -1,6 +1,6 @@
 # Benchmark report
 
-Evaluation date: 2026-07-16. Model: `gpt-5.5`. The score is intentionally
+Evaluation date: 2026-07-16. Model: `gpt-5.5`. Metric version: `2`. The score is intentionally
 structure-weighted (70% structure, 30% exact color/pixels); it is not a claim of pixel
 perfection.
 
@@ -18,14 +18,14 @@ The first run completed three cases before the configured API project returned
 work, and resumes incomplete cases without regenerating successful cases after quota is
 restored.
 
-| Case | Similarity | Structure | Native shapes | Text runs | Pictures | Flattened |
-|---|---:|---:|---:|---:|---:|---|
-| Agrifood pyramid | 0.9262 | 0.9171 | 22 | 6 | 1 photo | No |
-| Agrifood value chain | 0.8562 | 0.8634 | 119 | 21 | 1 photo | No |
-| OECD DPI dashboard | 0.9188 | 0.9311 | 96 | 34 | 0 | No |
-| IDA hybrid model | blocked by API quota | — | — | — | — | — |
-| IDA balance sheet | blocked by API quota | — | — | — | — | — |
-| Indonesia ride-hailing | blocked by API quota | — | — | — | — | — |
+| Case | Similarity | Structure | Native shapes | Text runs | Pictures | Flattened | Overflow |
+|---|---:|---:|---:|---:|---:|---|---:|
+| Agrifood pyramid | 0.9262 | 0.9171 | 22 | 6 | 1 photo | No | 0 |
+| Agrifood value chain | 0.8557 | 0.8628 | 119 | 21 | 1 photo | No | 0 |
+| OECD DPI dashboard | 0.9188 | 0.9311 | 96 | 34 | 0 | No | 0 |
+| IDA hybrid model | blocked by API quota | — | — | — | — | — | — |
+| IDA balance sheet | blocked by API quota | — | — | — | — | — | — |
+| Indonesia ride-hailing | blocked by API quota | — | — | — | — | — | — |
 
 ## Additional real-world case studies
 
@@ -33,10 +33,10 @@ Two supplied J.P. Morgan references were also rendered and scored with the same 
 metric. They are not part of the downloadable public set, so their source images and
 generated files are intentionally absent from Git.
 
-| Case | Similarity | Structure | Native shapes | Text runs | Pictures | Flattened |
-|---|---:|---:|---:|---:|---:|---|
-| Sport / entertainment economy | 0.9359 | 0.9550 | 179 | 33 | 0 | No |
-| Digitalisation / key challenges | 0.7636 | 0.7560 | 121 | 23 | 0 | No |
+| Case | Similarity | Structure | Native shapes | Text runs | Pictures | Flattened | Overflow |
+|---|---:|---:|---:|---:|---:|---|---:|
+| Sport / entertainment economy | 0.9359 | 0.9550 | 179 | 33 | 0 | No | 0 |
+| Digitalisation / key challenges | 0.7636 | 0.7560 | 121 | 23 | 0 | No | 0 |
 
 The digitalisation slide improved from 0.7609 to 0.7636 after one GPT‑5.5 patch. The patch
 corrected the right-column line wrapping without replacing the complete object graph.
@@ -53,12 +53,18 @@ corrected the right-column line wrapping without replacing the complete object g
   eliminating duplicated screenshot text.
 - `insufficient_quota` is not retried, and the benchmark runner skips queued paid cases
   after the first quota failure.
+- Cached reports are reused only when engine, metric, model, target score, raster policy,
+  and iteration count match the requested run.
+- Offline rescoring never makes an API call, validates all six target dimensions first,
+  and writes a separate summary instead of overwriting the canonical run.
+- The OOXML audit now rejects objects outside the slide canvas, including rotated objects.
 
 ## Re-run
 
 ```bash
 npm run benchmark:fetch
 npm run benchmark -- --model gpt-5.5 --iterations 1 --jobs 2
+npm run benchmark -- --rescore-existing --jobs 2
 ```
 
 The default result directory is ignored by Git. Use `--force` only when successful cached

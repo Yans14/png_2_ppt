@@ -1,10 +1,13 @@
 from __future__ import annotations
 
 import json
+import math
+import re
 import shutil
 import subprocess
 import tempfile
 import zipfile
+import xml.etree.ElementTree as ET
 from pathlib import Path
 
 import numpy as np
@@ -577,8 +580,23 @@ def audit_pptx(pptx_path: str | Path, spec: SlideSpec | None = None) -> dict[str
     with zipfile.ZipFile(source) as archive:
         names = archive.namelist()
         slide_names = sorted(name for name in names if name.startswith("ppt/slides/slide") and name.endswith(".xml"))
-        slide_xml = "\n".join(archive.read(name).decode("utf-8", errors="replace") for name in slide_names)
+        slide_xml_values = [
+            archive.read(name).decode("utf-8", errors="replace") for name in slide_names
+        ]
+        slide_xml = "\n".join(slide_xml_values)
         media = [name for name in names if name.startswith("ppt/media/") and not name.endswith("/")]
+        presentation_xml = archive.read("ppt/presentation.xml").decode(
+            "utf-8", errors="replace"
+        )
+
+    canvas_match = re.search(r"<p:sldSz[^>]*\bcx=\"(\d+)\"[^>]*\bcy=\"(\d+)\"", presentation_xml)
+    canvas_width = int(canvas_match.group(1)) if canvas_match else 0
+    canvas_height = int(canvas_match.group(2)) if canvas_match else 0
+    overflow_objects = _canvas_overflow_objects(
+        slide_xml_values,
+        canvas_width=canvas_width,
+        canvas_height=canvas_height,
+    )
 
     audit: dict[str, object] = {
         "slides": len(slide_names),
@@ -589,6 +607,9 @@ def audit_pptx(pptx_path: str | Path, spec: SlideSpec | None = None) -> dict[str
         "custom_geometry_paths": slide_xml.count("<a:custGeom>"),
         "cubic_bezier_segments": slide_xml.count("<a:cubicBezTo>"),
         "native_gradient_fills": slide_xml.count("<a:gradFill"),
+        "canvas_size_emu": [canvas_width, canvas_height],
+        "canvas_overflow_count": len(overflow_objects),
+        "canvas_overflow_objects": overflow_objects,
         "flattened_slide": False,
     }
     if spec is not None:
@@ -597,6 +618,83 @@ def audit_pptx(pptx_path: str | Path, spec: SlideSpec | None = None) -> dict[str
         audit["suspicious_full_slide_raster_images"] = spec.suspicious_full_slide_images()
         audit["flattened_slide"] = bool(spec.suspicious_full_slide_images())
     return audit
+
+
+def _canvas_overflow_objects(
+    slide_xml_values: list[str],
+    *,
+    canvas_width: int,
+    canvas_height: int,
+    tolerance_emu: int = 1000,
+) -> list[dict[str, object]]:
+    if canvas_width <= 0 or canvas_height <= 0:
+        return []
+    namespaces = {
+        "a": "http://schemas.openxmlformats.org/drawingml/2006/main",
+        "p": "http://schemas.openxmlformats.org/presentationml/2006/main",
+    }
+    object_tags = (
+        f"{{{namespaces['p']}}}sp",
+        f"{{{namespaces['p']}}}pic",
+        f"{{{namespaces['p']}}}graphicFrame",
+        f"{{{namespaces['p']}}}cxnSp",
+    )
+    results: list[dict[str, object]] = []
+    for slide_index, slide_xml in enumerate(slide_xml_values, start=1):
+        root = ET.fromstring(slide_xml)
+        for item in root.iter():
+            if item.tag not in object_tags:
+                continue
+            transform = item.find(".//a:xfrm", namespaces)
+            if transform is None:
+                continue
+            offset = transform.find("a:off", namespaces)
+            extent = transform.find("a:ext", namespaces)
+            if offset is None or extent is None:
+                continue
+            x = int(offset.attrib.get("x", "0"))
+            y = int(offset.attrib.get("y", "0"))
+            width = int(extent.attrib.get("cx", "0"))
+            height = int(extent.attrib.get("cy", "0"))
+            angle = int(transform.attrib.get("rot", "0")) / 60000.0
+            if angle:
+                radians = math.radians(angle)
+                rotated_width = abs(width * math.cos(radians)) + abs(
+                    height * math.sin(radians)
+                )
+                rotated_height = abs(width * math.sin(radians)) + abs(
+                    height * math.cos(radians)
+                )
+                center_x = x + width / 2
+                center_y = y + height / 2
+                left = center_x - rotated_width / 2
+                top = center_y - rotated_height / 2
+                right = center_x + rotated_width / 2
+                bottom = center_y + rotated_height / 2
+            else:
+                left, top, right, bottom = x, y, x + width, y + height
+            if (
+                left >= -tolerance_emu
+                and top >= -tolerance_emu
+                and right <= canvas_width + tolerance_emu
+                and bottom <= canvas_height + tolerance_emu
+            ):
+                continue
+            metadata = item.find(".//p:cNvPr", namespaces)
+            results.append(
+                {
+                    "slide": slide_index,
+                    "id": metadata.attrib.get("id") if metadata is not None else None,
+                    "name": metadata.attrib.get("name") if metadata is not None else None,
+                    "bbox_emu": [
+                        round(left),
+                        round(top),
+                        round(right - left),
+                        round(bottom - top),
+                    ],
+                }
+            )
+    return results
 
 
 def write_report(report: dict[str, object], output_path: str | Path) -> Path:

@@ -107,9 +107,18 @@ npm run benchmark:fetch
 npm run benchmark -- --model gpt-5.5 --iterations 1 --jobs 2
 ```
 
+After changing only the renderer or metrics, rescore existing object graphs without any API
+call:
+
+```bash
+npm run benchmark -- --rescore-existing --jobs 2
+```
+
 Results are written to `benchmarks/results/summary.json` and `summary.csv`. Each case also
 keeps its PPTX, strict spec, render intermediates, stdout/stderr, and audit report. Use
 `--case ida-hybrid-model` to run one case and `--force` to replace cached results.
+Subset summaries use their own filename, and offline rescoring writes
+`summary-rescore.json`, so neither operation can overwrite the canonical full-run summary.
 
 See [BENCHMARK.md](BENCHMARK.md) for the measured evaluation and the changes it drove.
 
