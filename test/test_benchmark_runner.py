@@ -76,6 +76,20 @@ class BenchmarkRunnerTests(unittest.TestCase):
                     expected_height=720,
                 )
 
+    def test_offline_rescore_forces_zero_llm_iterations(self) -> None:
+        self.assertEqual(
+            RUNNER.effective_iterations(
+                Namespace(rescore_existing=True, iterations=9)
+            ),
+            0,
+        )
+        self.assertEqual(
+            RUNNER.effective_iterations(
+                Namespace(rescore_existing=False, iterations=2)
+            ),
+            2,
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -56,6 +56,12 @@ def cache_matches(report: dict[str, Any], args: argparse.Namespace) -> bool:
     )
 
 
+def effective_iterations(args: argparse.Namespace) -> int:
+    """Offline rescoring renders exactly once and can never trigger LLM refinement."""
+
+    return 0 if args.rescore_existing else int(args.iterations)
+
+
 def run_case(
     case: dict[str, Any],
     args: argparse.Namespace,
@@ -90,6 +96,7 @@ def run_case(
                 "report": report,
             }
 
+    iterations = effective_iterations(args)
     command = [
         sys.executable,
         "-m",
@@ -107,7 +114,7 @@ def run_case(
         "--model",
         args.model,
         "--iterations",
-        str(args.iterations),
+        str(iterations),
         "--target-score",
         str(args.target_score),
         "--raster-policy",
@@ -128,7 +135,7 @@ def run_case(
         env=environment,
         capture_output=True,
         text=True,
-        timeout=args.timeout * (args.iterations + 2),
+        timeout=args.timeout * (iterations + 2),
         check=False,
     )
     elapsed = round(time.monotonic() - started, 3)
@@ -248,7 +255,7 @@ def main() -> int:
     completed_rows = [row for row in rows if row["status"] in COMPLETED_STATUSES]
     summary = {
         "model": args.model,
-        "iterations": args.iterations,
+        "iterations": effective_iterations(args),
         "case_count": len(results),
         "success_count": sum(result["status"] in COMPLETED_STATUSES for result in results),
         "mean_similarity_score": (
