@@ -13,6 +13,8 @@ node_modules/
 out/
 benchmarks/cache/
 benchmarks/results/
+benchmarks/api_examples/cache/
+benchmarks/api_examples/fixtures/
 coverage/
 .coverage
 .pytest_cache/

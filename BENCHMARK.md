@@ -5,6 +5,45 @@ Metric version: `2`. The score is intentionally structure-weighted (70% structur
 30% exact color/pixels); it is not a claim of pixel perfection. GPT‑5.6 Luna is the
 official cost-sensitive GPT‑5.6 tier and supports image input plus structured outputs.
 
+## Six-endpoint API quality suite
+
+Evaluation date: 2026-07-19. `benchmarks/api_examples/manifest.json` contains five
+examples for each public API endpoint, for 30 cases in total. The suite calls the real
+FastAPI contracts and worker, then evaluates the downloaded artifacts locally.
+
+| Endpoint | Examples | Quality contract | Current result |
+|---|---:|---|---:|
+| Image to editable | 5 public slide images | similarity ≥ 0.62, native objects, no flattening, valid OOXML | 5/5 |
+| Figure to editable | 2 synthetic SVGs + 3 OpenMoji SVGs | native custom geometry, nonblank render, no embedded raster | 5/5 |
+| Notes | move, replace, recolor, resize, duplicate | exact requested mutation, note removed, content and OOXML preserved | 5/5 |
+| Beautify | 5 editable public reconstructions | content invariant, OOXML valid, target similarity non-regressing | blocked by API quota |
+| Render | 5 public PPTX decks | expected previews exist and are nonblank | 5/5 |
+| Validate | 4 valid packages + 1 broken relationship | expected valid/invalid result detected | 5/5 |
+
+The 25 completed evaluations passed. The five beautification submissions are recorded as
+`blocked_external`, not failed: the account quota was exhausted after the first candidate
+was generated and before its GPT‑5.5 review. That partial candidate was inspected but not
+accepted. It remained native and OOXML-compatible, while target similarity moved from
+0.7960 to 0.7833, so the quality gate would correctly require another correction.
+
+The five image reconstructions have a mean similarity of **0.8838** (range 0.8526–0.9279).
+They contain 310 native shapes and 121 native text runs in total; the only picture objects
+are the independent photographic regions. Full-size visual inspection found no clipping,
+flattening, or unreadable text. All five note outputs were also inspected at full size;
+review scores were 9.5–10.0 and the requested point/color/text values matched the package
+measurements exactly.
+
+The reusable runner writes:
+
+- `out/api-endpoint-benchmark/summary.json` for full per-case metrics and errors;
+- `out/api-endpoint-benchmark/summary.csv` for quick analysis;
+- `out/api-endpoint-benchmark/montages/` for input/output review;
+- `out/api-endpoint-benchmark/results/<endpoint>/<case>/` for individual artifacts.
+
+The benchmark fixtures and runner contain no API key. Generated sources, service state,
+and output artifacts are ignored by Git. Run the commands documented in README with
+`--resume` after quota is available to complete the five beautification reviews.
+
 ## Engine 1.2 quality and compatibility validation
 
 Engine `1.2.0` / metric `3` adds per-object error regions, high-error focus crops,
@@ -80,7 +119,7 @@ depends on image size, response length, and correction count. See OpenAI's offic
 
 ## Additional real-world case studies
 
-Two supplied J.P. Morgan references were also rendered and scored with the same current
+Two supplied private references were also rendered and scored with the same current
 metric. They are not part of the downloadable public set, so their source images and
 generated files are intentionally absent from Git.
 

@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "editable-pptx-reconstructor"
-version = "1.4.0"
+version = "2.0.0"
 description = "Convert images, SVG figures and slide references into native editable PowerPoint objects"
 readme = "README.md"
 license = {file = "LICENSE"}
@@ -16,11 +16,22 @@ dependencies = [
   "svgelements>=1.9.6,<2",
 ]
 
+[project.optional-dependencies]
+api = [
+  "fastapi>=0.115,<1",
+  "uvicorn>=0.34,<1",
+  "python-multipart>=0.0.20,<1",
+  "httpx>=0.28,<1",
+]
+
 [project.scripts]
 image-to-editable-pptx = "editable_pptx.cli:main"
 figure-to-editable-pptx = "editable_pptx.shape_cli:main"
 validate-editable-pptx = "editable_pptx.powerpoint_cli:main"
 apply-slide-notes = "editable_pptx.notes_cli:main"
+editable-pptx-api = "editable_pptx.api:main"
+editable-pptx-worker = "editable_pptx.worker:main"
+editable-pptx-doctor = "editable_pptx.doctor_cli:main"
 
 [tool.setuptools]
 packages = ["editable_pptx"]

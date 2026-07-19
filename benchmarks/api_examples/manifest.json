@@ -1,0 +1,52 @@
+{
+  "version": 1,
+  "description": "Five reproducible quality examples for every public API endpoint.",
+  "public_slide_sources": {
+    "world-bank-agrifood": "https://www.worldbank.org/en/events/2021/06/18/whats-cooking-digital-transformation-of-the-agrifood-system",
+    "oecd-digital-government": "https://www.oecd.org/en/blogs/2026/06/slides-from-the-launch-of-digital-government-outlook-2026.html",
+    "world-bank-ida": "https://www.worldbank.org/en/events/2024/03/12/ida-in-focus",
+    "world-bank-indonesia": "https://www.worldbank.org/en/country/indonesia/publication/beyond-unicorns-harnessing-digital-technologies-for-inclusion-in-indonesia"
+  },
+  "image_to_editable": [
+    {"id": "agrifood-value-chain", "input": "benchmarks/cache/targets/agrifood-value-chain.png", "category": "illustrated process"},
+    {"id": "agrifood-enablers-pyramid", "input": "benchmarks/cache/targets/agrifood-enablers-pyramid.png", "category": "pyramid diagram"},
+    {"id": "oecd-dpi-dashboard", "input": "benchmarks/cache/targets/oecd-dpi-dashboard.png", "category": "chart and annotation"},
+    {"id": "ida-hybrid-model", "input": "benchmarks/cache/targets/ida-hybrid-model.png", "category": "financial flow diagram"},
+    {"id": "indonesia-ride-hailing", "input": "benchmarks/cache/targets/indonesia-ride-hailing.png", "category": "photo and typography"}
+  ],
+  "figure_to_editable": [
+    {"id": "curved-arrow", "input": "examples/figures/curved-arrow.svg", "source": "local MIT fixture"},
+    {"id": "compound-mark", "input": "examples/figures/compound-mark.svg", "source": "local MIT fixture"},
+    {"id": "openmoji-light-bulb", "input": "cache/figures/1F4A1.svg", "url": "https://raw.githubusercontent.com/hfg-gmuend/openmoji/master/color/svg/1F4A1.svg", "source": "OpenMoji CC BY-SA 4.0"},
+    {"id": "openmoji-trophy", "input": "cache/figures/1F3C6.svg", "url": "https://raw.githubusercontent.com/hfg-gmuend/openmoji/master/color/svg/1F3C6.svg", "source": "OpenMoji CC BY-SA 4.0"},
+    {"id": "openmoji-globe", "input": "cache/figures/1F30D.svg", "url": "https://raw.githubusercontent.com/hfg-gmuend/openmoji/master/color/svg/1F30D.svg", "source": "OpenMoji CC BY-SA 4.0"}
+  ],
+  "notes": [
+    {"id": "move-card", "input": "fixtures/notes/move-card.pptx", "expectation": {"kind": "move", "target": "target_card", "dy_pt": 28}},
+    {"id": "replace-value", "input": "fixtures/notes/replace-value.pptx", "expectation": {"kind": "replace_text", "old": "Revenue 2025: US$400m", "new": "Revenue 2026: US$500m"}},
+    {"id": "recolor-accent", "input": "fixtures/notes/recolor-accent.pptx", "expectation": {"kind": "recolor", "target": "target_accent", "color": "#0A8F5A"}},
+    {"id": "resize-panel", "input": "fixtures/notes/resize-panel.pptx", "expectation": {"kind": "resize", "target": "target_panel", "width_pt": 360}},
+    {"id": "duplicate-row", "input": "fixtures/notes/duplicate-row.pptx", "expectation": {"kind": "duplicate", "new_text": "ROW B"}}
+  ],
+  "beautify": [
+    {"id": "agrifood-value-chain", "input": "out/benchmark-gpt-5.6-luna/agrifood-value-chain/reconstruction.pptx", "target": "benchmarks/cache/targets/agrifood-value-chain.png"},
+    {"id": "agrifood-enablers-pyramid", "input": "out/benchmark-gpt-5.6-luna/agrifood-enablers-pyramid/reconstruction.pptx", "target": "benchmarks/cache/targets/agrifood-enablers-pyramid.png"},
+    {"id": "oecd-dpi-dashboard", "input": "out/benchmark-gpt-5.6-luna/oecd-dpi-dashboard/reconstruction.pptx", "target": "benchmarks/cache/targets/oecd-dpi-dashboard.png"},
+    {"id": "ida-hybrid-model", "input": "out/benchmark-gpt-5.6-luna/ida-hybrid-model/reconstruction.pptx", "target": "benchmarks/cache/targets/ida-hybrid-model.png"},
+    {"id": "indonesia-ride-hailing", "input": "out/benchmark-gpt-5.6-luna/indonesia-ride-hailing/reconstruction.pptx", "target": "benchmarks/cache/targets/indonesia-ride-hailing.png"}
+  ],
+  "render": [
+    {"id": "agrifood-value-chain", "input": "out/benchmark-gpt-5.6-luna/agrifood-value-chain/final.pptx"},
+    {"id": "agrifood-enablers-pyramid", "input": "out/benchmark-gpt-5.6-luna/agrifood-enablers-pyramid/final.pptx"},
+    {"id": "oecd-dpi-dashboard", "input": "out/benchmark-gpt-5.6-luna/oecd-dpi-dashboard/final.pptx"},
+    {"id": "ida-hybrid-model", "input": "out/benchmark-gpt-5.6-luna/ida-hybrid-model/final.pptx"},
+    {"id": "indonesia-ride-hailing", "input": "out/benchmark-gpt-5.6-luna/indonesia-ride-hailing/final.pptx"}
+  ],
+  "validate": [
+    {"id": "agrifood-value-chain-valid", "input": "out/benchmark-gpt-5.6-luna/agrifood-value-chain/final.pptx", "expected": "valid"},
+    {"id": "agrifood-pyramid-valid", "input": "out/benchmark-gpt-5.6-luna/agrifood-enablers-pyramid/final.pptx", "expected": "valid"},
+    {"id": "oecd-dashboard-valid", "input": "out/benchmark-gpt-5.6-luna/oecd-dpi-dashboard/final.pptx", "expected": "valid"},
+    {"id": "ida-hybrid-valid", "input": "out/benchmark-gpt-5.6-luna/ida-hybrid-model/final.pptx", "expected": "valid"},
+    {"id": "broken-relationship-invalid", "input": "fixtures/validate/broken-relationship.pptx", "expected": "invalid"}
+  ]
+}

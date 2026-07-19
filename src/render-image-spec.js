@@ -294,11 +294,14 @@ function gradientXml(fill) {
   return `<a:gradFill rotWithShape="1"><a:gsLst>${stops}</a:gsLst><a:lin ang="${angle}" scaled="1"/></a:gradFill>`;
 }
 
-async function injectGradients(pptxPath, gradientJobs) {
-  if (!gradientJobs.size) return;
+async function injectGradients(pptxPath, gradientJobsBySlide) {
+  if (![...gradientJobsBySlide.values()].some((jobs) => jobs.size)) return;
   const zip = await JSZip.loadAsync(fs.readFileSync(pptxPath));
   const slideFiles = Object.keys(zip.files).filter((name) => /^ppt\/slides\/slide\d+\.xml$/.test(name));
   for (const slideFile of slideFiles) {
+    const slideNumber = Number(slideFile.match(/slide(\d+)\.xml$/)?.[1] || 0);
+    const gradientJobs = gradientJobsBySlide.get(slideNumber) || new Map();
+    if (!gradientJobs.size) continue;
     let xml = await zip.file(slideFile).async('string');
     xml = xml.replace(/<p:sp>[\s\S]*?<\/p:sp>/g, (shapeXml) => {
       for (const [name, fill] of gradientJobs) {
@@ -318,27 +321,8 @@ async function injectGradients(pptxPath, gradientJobs) {
   fs.writeFileSync(pptxPath, buffer);
 }
 
-async function render(specPath, outputPath) {
-  const envelope = JSON.parse(fs.readFileSync(specPath, 'utf8'));
-  const spec = envelope.spec || envelope;
-  const assets = envelope.assets || {};
-  const pptx = new PptxGenJS();
-  const layoutName = 'EDITABLE_IMAGE_LAYOUT';
-  pptx.defineLayout({ name: layoutName, width: px(spec.source_width), height: px(spec.source_height) });
-  pptx.layout = layoutName;
-  pptx.author = 'Editable PPTX Reconstruction';
-  pptx.subject = 'Editable reconstruction from a reference image';
-  pptx.title = 'Editable reconstructed slide';
-  pptx.company = 'OpenAI Codex';
-  pptx.lang = 'fr-FR';
-  pptx.theme = {
-    headFontFace: 'Arial',
-    bodyFontFace: 'Arial',
-    lang: 'fr-FR',
-  };
-
+function addSpecSlide(pptx, spec, assets, gradientJobs) {
   const slide = pptx.addSlide();
-  const gradientJobs = new Map();
   if (spec.background.kind === 'solid') {
     slide.background = { color: color(spec.background.color, 'FFFFFF'), transparency: transparency(spec.background.opacity) };
   } else if (spec.background.kind === 'linear_gradient') {
@@ -353,10 +337,44 @@ async function render(specPath, outputPath) {
   }
 
   for (const element of flattenElements(spec)) addElement(slide, pptx, element, assets, gradientJobs);
+}
+
+async function render(specPath, outputPath) {
+  const envelope = JSON.parse(fs.readFileSync(specPath, 'utf8'));
+  const specs = envelope.specs || (envelope.spec ? [envelope.spec] : [envelope]);
+  const assetsBySlide = envelope.assets_by_slide || specs.map((_, index) => index === 0 ? (envelope.assets || {}) : {});
+  if (!Array.isArray(specs) || specs.length === 0) throw new Error('At least one slide spec is required');
+  const first = specs[0];
+  for (const [index, spec] of specs.entries()) {
+    if (spec.source_width !== first.source_width || spec.source_height !== first.source_height) {
+      throw new Error(`All slide specs must share one canvas; slide ${index + 1} differs`);
+    }
+  }
+  const pptx = new PptxGenJS();
+  const layoutName = 'EDITABLE_IMAGE_LAYOUT';
+  pptx.defineLayout({ name: layoutName, width: px(first.source_width), height: px(first.source_height) });
+  pptx.layout = layoutName;
+  pptx.author = 'Editable PPTX Reconstruction';
+  pptx.subject = 'Editable reconstruction from a reference image';
+  pptx.title = 'Editable reconstructed slide';
+  pptx.company = 'OpenAI Codex';
+  pptx.lang = 'fr-FR';
+  pptx.theme = {
+    headFontFace: 'Arial',
+    bodyFontFace: 'Arial',
+    lang: 'fr-FR',
+  };
+
+  const gradientJobsBySlide = new Map();
+  specs.forEach((spec, index) => {
+    const gradientJobs = new Map();
+    addSpecSlide(pptx, spec, assetsBySlide[index] || {}, gradientJobs);
+    gradientJobsBySlide.set(index + 1, gradientJobs);
+  });
 
   fs.mkdirSync(path.dirname(outputPath), { recursive: true });
   await pptx.writeFile({ fileName: outputPath, compression: true });
-  await injectGradients(outputPath, gradientJobs);
+  await injectGradients(outputPath, gradientJobsBySlide);
 }
 
 if (require.main === module) {
@@ -371,4 +389,4 @@ if (require.main === module) {
   });
 }
 
-module.exports = { render, flattenElements, gradientXml, lineShapeOptions, pathPoints };
+module.exports = { render, addSpecSlide, flattenElements, gradientXml, lineShapeOptions, pathPoints };

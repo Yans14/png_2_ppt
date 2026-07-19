@@ -68,6 +68,13 @@ def normalize_structured_output_schema(model_type: type[BaseModel]) -> dict[str,
                 continue
             else:
                 result[key] = normalize(value)
+        properties = result.get("properties")
+        if isinstance(properties, dict):
+            # Responses strict structured outputs require every property to be
+            # present. Nullable/defaulted Pydantic fields remain nullable, but the
+            # model must emit their key explicitly.
+            result["required"] = list(properties)
+            result["additionalProperties"] = False
         return result
 
     return normalize(schema)  # type: ignore[return-value]

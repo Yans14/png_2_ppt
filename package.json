@@ -1,6 +1,6 @@
 {
   "name": "editable-pptx-reconstructor",
-  "version": "1.4.0",
+  "version": "2.0.0",
   "private": true,
   "main": "src/render-image-spec.js",
   "scripts": {

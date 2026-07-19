@@ -63,6 +63,101 @@ cp .env.example .env
 Add `OPENAI_API_KEY` to `.env`, or export it in the shell. The project never logs the key,
 and `.env` is ignored by Git.
 
+For the local HTTP service, install the API extra instead:
+
+```bash
+pip install -e '.[api]'
+editable-pptx-api --with-worker
+editable-pptx-doctor
+```
+
+Swagger is available at `http://127.0.0.1:8765/docs`. The service reuses
+`OPENAI_API_KEY` from the process environment or the project `.env`; the value is read
+into memory and is never copied into SQLite, job artifacts, reports, or logs.
+
+## Asynchronous editing API
+
+Version 2 exposes six independent job endpoints:
+
+| Endpoint | Purpose |
+|---|---|
+| `POST /v1/image-to-editable` | one or more slide images to a native editable deck |
+| `POST /v1/figure-to-editable` | SVG/raster figure to PowerPoint custom geometry |
+| `POST /v1/notes` | execute API text, comments, speaker notes, and visible callouts |
+| `POST /v1/beautify` | improve a PPTX while preserving business content |
+| `POST /v1/render` | render all slides to PDF and PNG previews |
+| `POST /v1/validate` | OOXML, portability, and optional real-PowerPoint checks |
+
+Each mutation endpoint accepts `mode=plan` or `mode=apply`. Planning produces a
+checksummed JSON patch without changing the source. Apply the reviewed plan with
+`POST /v1/plans/{plan_id}/apply`; a changed source checksum invalidates the plan.
+Inputs can be uploads or `source_artifact_id` values from an earlier job, so a deck can
+flow through reconstruction, notes, beautification, render, and validation without being
+uploaded again.
+
+Jobs are polled at `/v1/jobs/{job_id}` or streamed as server-sent events at
+`/v1/jobs/{job_id}/events`. Cancellation, retry, artifact download, and a seven-day local
+artifact TTL are supported. SQLite stores metadata; immutable files live in the service
+home (`~/.local/share/editable-pptx-service` by default).
+`POST /v1/jobs/{job_id}/bundle` creates an optional ZIP containing `manifest.json` and
+all individual artifacts.
+
+Notes and beautification use GPT‑5.5 for both planning and visual review. Each attempt is
+transactional: extract stable OOXML shape IDs, request a typed patch, apply it to a copy,
+render the result, run deterministic content/OOXML gates, and ask GPT‑5.5 to review the
+candidate. A rejected result is repaired up to three times. If all attempts fail, the job
+is marked failed but its highest-scoring candidate remains downloadable.
+
+The note-source priority is API instruction, PowerPoint comments, speaker notes, then
+visible authoring callouts. Unsupported native objects such as charts, SmartArt, OLE,
+media, relationships, and animations are preserved in place because edits are surgical
+OOXML mutations, not a full deck regeneration. PPTM input is intentionally rejected.
+
+Example:
+
+```bash
+curl -F file=@deck.pptx \
+  -F mode=apply \
+  -F slides=all \
+  -F max_attempts=3 \
+  http://127.0.0.1:8765/v1/notes
+
+curl -F source_artifact_id="$PPTX_ARTIFACT_ID" \
+  -F template=@template.pptx \
+  -F instruction='Tighten hierarchy and spacing; preserve all business content' \
+  http://127.0.0.1:8765/v1/beautify
+```
+
+The API is localhost-only by default. Binding to another interface is refused unless
+`EDITABLE_PPTX_BEARER_TOKEN` is configured; when set, all non-health API calls require
+`Authorization: Bearer …`.
+
+### Run the 30-case endpoint quality suite
+
+`benchmarks/api_examples/manifest.json` defines five examples for each of the six API
+endpoints. The runner submits the real multipart requests through FastAPI, lets the real
+worker execute them, downloads the artifacts, renders every PPTX, and writes endpoint-
+specific quality checks rather than treating HTTP success as visual success.
+
+```bash
+# Prepare public SVGs and deterministic note fixtures.
+python scripts/prepare_api_examples.py
+
+# API-free endpoints: figure conversion, rendering, and validation.
+python scripts/run_api_examples.py \
+  --endpoints figure_to_editable,render,validate --offline
+
+# GPT-backed endpoints; uses OPENAI_API_KEY already present in .env.
+python scripts/run_api_examples.py \
+  --endpoints image_to_editable,notes,beautify \
+  --model gpt-5.5 --max-attempts 1 --paid --offline --resume
+```
+
+Results are written to `out/api-endpoint-benchmark/summary.json`, `summary.csv`, and
+`montages/`. Quota/rate-limit failures are reported as `blocked_external`, never as a
+quality failure. `--resume` keeps successful cases and retries only incomplete ones.
+See [BENCHMARK.md](BENCHMARK.md#six-endpoint-api-quality-suite) for the measured snapshot.
+
 ## Reconstruct a slide image
 
 ```bash
