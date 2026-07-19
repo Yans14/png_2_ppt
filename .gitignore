@@ -44,3 +44,5 @@ reports/
 artifacts/
 tmp/
 candidate_specs/
+work/
+pkcs11.txt

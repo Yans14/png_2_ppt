@@ -433,7 +433,49 @@ class SlidePatch(StrictModel):
         return self
 
 
-def apply_slide_patch(spec: SlideSpec, patch: SlidePatch) -> SlideSpec:
+class SlideNotePatch(StrictModel):
+    """Structural edit produced from production notes visible on a slide.
+
+    Refinement patches intentionally touch only a handful of objects. A production
+    note can request a table expansion, section deletion, or other broad edit, so
+    this contract permits a larger stable-ID delta while still bounding output.
+    """
+
+    detected_notes: list[str] = Field(max_length=16)
+    instruction_summary: str
+    background: FillSpec | None
+    upsert_components: list[ComponentSpec] = Field(max_length=16)
+    remove_component_ids: list[str] = Field(max_length=16)
+    upsert_elements: list[ElementSpec] = Field(max_length=96)
+    remove_element_ids: list[str] = Field(max_length=96)
+    reconstruction_notes: list[str] | None
+
+    @model_validator(mode="after")
+    def validate_patch_ids(self) -> "SlideNotePatch":
+        component_ids = [item.id for item in self.upsert_components]
+        element_ids = [item.id for item in self.upsert_elements]
+        if len(component_ids) != len(set(component_ids)):
+            raise ValueError("upsert component ids must be unique")
+        if len(element_ids) != len(set(element_ids)):
+            raise ValueError("upsert element ids must be unique")
+        if set(component_ids) & set(self.remove_component_ids):
+            raise ValueError("a component cannot be both upserted and removed")
+        if set(element_ids) & set(self.remove_element_ids):
+            raise ValueError("an element cannot be both upserted and removed")
+        return self
+
+
+class SlideNoteReview(StrictModel):
+    """Semantic QA result for a visible-note modification."""
+
+    instruction_fulfilled: bool
+    visible_notes_removed: bool
+    layout_preserved: bool
+    issues: list[str] = Field(max_length=16)
+    repair_instruction: str | None
+
+
+def apply_slide_patch(spec: SlideSpec, patch: SlidePatch | SlideNotePatch) -> SlideSpec:
     """Apply a stable-ID patch while preserving the order of untouched objects."""
 
     component_updates = {item.id: item for item in patch.upsert_components}

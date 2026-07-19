@@ -97,6 +97,44 @@ Outputs:
 only genuine photographs or textures as independent picture objects. `allow` also permits
 small raster illustrations, while full-slide flattening remains forbidden.
 
+## Execute production notes visible on a slide
+
+The note-modification service reads authoring instructions already transcribed into the
+editable `SlideSpec`, applies the requested structural change, removes the note callout,
+renders a new PPTX, and runs semantic plus OOXML validation.
+
+Offline mode is the privacy-first default. It currently executes repeated-row additions
+without sending the slide or its text to an external service:
+
+```bash
+apply-slide-notes \
+  --input "/absolute/path/to/source-slide.png" \
+  --spec-in "./out/slide-editable.spec.json" \
+  --output "./out/slide-notes-applied.pptx" \
+  --engine offline \
+  --raster-policy none
+```
+
+For broader natural-language edits on sanitized or explicitly authorized material, use
+the structured OpenAI engine. It returns a bounded stable-ID patch rather than regenerating
+the complete slide, then a second vision pass verifies instruction completion, note removal,
+and preservation of unrelated layout:
+
+```bash
+apply-slide-notes \
+  --input "/absolute/path/to/sanitized-slide.png" \
+  --spec-in "./out/slide-editable.spec.json" \
+  --output "./out/slide-notes-applied.pptx" \
+  --engine openai \
+  --model gpt-5.5 \
+  --review-iterations 1 \
+  --powerpoint-validation auto
+```
+
+Do not use `--engine openai` for confidential material unless sending it to the configured
+provider is explicitly permitted. The report records detected notes, touched stable IDs,
+semantic review, native-object audit, and PowerPoint compatibility status.
+
 ## PowerPoint compatibility
 
 Every output receives a package-level Open XML validation covering relationships, content
@@ -193,8 +231,8 @@ montage and open representative PPTX files in PowerPoint.
 ## Architecture
 
 - `editable_pptx/`: Python schemas, image analysis, API client, correction loop, object-level
-  metrics, raster extraction, deterministic figure conversion, OOXML audits, and native
-  PowerPoint validation adapters.
+  metrics, raster extraction, visible-note modification, deterministic figure conversion,
+  OOXML audits, and native PowerPoint validation adapters.
 - `src/render-image-spec.js`: native PptxGenJS renderer for the strict object graph.
 - `editable_pptx/js/`: compiled renderer shipped with the Python package.
 - `benchmarks/manifest.json`: public benchmark sources, pages, and categories.

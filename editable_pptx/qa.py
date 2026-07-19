@@ -52,8 +52,18 @@ def render_first_slide(
 
     with tempfile.TemporaryDirectory(prefix="editable-pptx-qa-") as temp_dir:
         temp = Path(temp_dir)
+        profile_uri = (temp / "libreoffice-profile").resolve().as_uri()
         converted = subprocess.run(
-            [soffice, "--headless", "--convert-to", "pdf", "--outdir", str(temp), str(source)],
+            [
+                soffice,
+                f"-env:UserInstallation={profile_uri}",
+                "--headless",
+                "--convert-to",
+                "pdf",
+                "--outdir",
+                str(temp),
+                str(source),
+            ],
             capture_output=True,
             text=True,
             timeout=timeout_seconds,
