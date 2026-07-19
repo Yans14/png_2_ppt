@@ -433,6 +433,36 @@ class SlidePatch(StrictModel):
         return self
 
 
+SlideNoteActionType = Literal[
+    "add_rows",
+    "remove_rows",
+    "replace_text",
+    "replace_values",
+    "delete_objects",
+    "move_objects",
+    "resize_objects",
+    "recolor",
+    "restyle",
+    "add_objects",
+    "duplicate_objects",
+    "add_section",
+    "remove_section",
+    "update_chart",
+    "update_table",
+    "update_comments",
+    "resolve_placeholders",
+    "global_reflow",
+    "other",
+]
+
+
+class SlideNoteAction(StrictModel):
+    action_type: SlideNoteActionType
+    instruction: str
+    target_ids: list[str] = Field(max_length=64)
+    requires_reflow: bool
+
+
 class SlideNotePatch(StrictModel):
     """Structural edit produced from production notes visible on a slide.
 
@@ -443,12 +473,22 @@ class SlideNotePatch(StrictModel):
 
     detected_notes: list[str] = Field(max_length=16)
     instruction_summary: str
+    actions: list[SlideNoteAction] = Field(max_length=32)
+    layout_strategy: Literal["preserve", "local_reflow", "global_reflow"]
+    minimum_font_size_pt: float | None
     background: FillSpec | None
     upsert_components: list[ComponentSpec] = Field(max_length=16)
     remove_component_ids: list[str] = Field(max_length=16)
     upsert_elements: list[ElementSpec] = Field(max_length=96)
     remove_element_ids: list[str] = Field(max_length=96)
     reconstruction_notes: list[str] | None
+
+    @field_validator("minimum_font_size_pt")
+    @classmethod
+    def positive_minimum_font(cls, value: float | None) -> float | None:
+        if value is not None and value <= 0:
+            raise ValueError("minimum font size must be positive")
+        return value
 
     @model_validator(mode="after")
     def validate_patch_ids(self) -> "SlideNotePatch":
@@ -471,6 +511,9 @@ class SlideNoteReview(StrictModel):
     instruction_fulfilled: bool
     visible_notes_removed: bool
     layout_preserved: bool
+    dependent_objects_adjusted: bool
+    minimum_font_size_ok: bool
+    balanced_density: bool
     issues: list[str] = Field(max_length=16)
     repair_instruction: str | None
 

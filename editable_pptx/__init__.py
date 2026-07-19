@@ -3,7 +3,7 @@
 from .figure import FigureConversionOptions, convert_figure, figure_to_slide_spec, load_figure
 from .figure_optimizer import run_target_optimizer
 from .figure_refinement import FigureOptimizationAdvice, FigureReview
-from .models import SlideNotePatch, SlideNoteReview, SlideSpec
+from .models import SlideNoteAction, SlideNotePatch, SlideNoteReview, SlideSpec
 from .pptx_shape_replace import replace_shape_geometry
 from .version import __version__
 from .visible_notes import request_note_modification, review_note_modification
@@ -13,6 +13,7 @@ __all__ = [
     "FigureReview",
     "FigureOptimizationAdvice",
     "SlideSpec",
+    "SlideNoteAction",
     "SlideNotePatch",
     "SlideNoteReview",
     "convert_figure",

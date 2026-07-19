@@ -101,7 +101,20 @@ small raster illustrations, while full-slide flattening remains forbidden.
 
 The note-modification service reads authoring instructions already transcribed into the
 editable `SlideSpec`, applies the requested structural change, removes the note callout,
-renders a new PPTX, and runs semantic plus OOXML validation.
+renders a new PPTX, and runs semantic, layout, and OOXML validation.
+
+The structured OpenAI engine classifies and executes these note families:
+
+- add or remove repeated rows;
+- replace text, values, placeholders, comments, chart data, or table data;
+- delete, move, resize, recolor, restyle, add, or duplicate objects;
+- add or remove sections;
+- local or global layout reflow.
+
+Content-density changes trigger adaptive layout. The service can reclaim gaps, resize
+sections, and move dependent cards, labels, bars, values, rules, comments, and backgrounds
+together. Local checks reject text below the configured minimum, likely clipped text, and
+global reflows that do not touch neighboring existing objects.
 
 Offline mode is the privacy-first default. It currently executes repeated-row additions
 without sending the slide or its text to an external service:
@@ -127,12 +140,15 @@ apply-slide-notes \
   --output "./out/slide-notes-applied.pptx" \
   --engine openai \
   --model gpt-5.5 \
-  --review-iterations 1 \
+  --review-iterations 2 \
+  --layout-mode global \
+  --minimum-body-font-size 7.5 \
   --powerpoint-validation auto
 ```
 
 Do not use `--engine openai` for confidential material unless sending it to the configured
-provider is explicitly permitted. The report records detected notes, touched stable IDs,
+provider is explicitly permitted. The report records typed actions, layout strategy,
+detected notes, touched stable IDs, font and text-fit checks, dependent-object reflow,
 semantic review, native-object audit, and PowerPoint compatibility status.
 
 ## PowerPoint compatibility

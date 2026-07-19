@@ -18,6 +18,7 @@ from .visible_notes import (
     VisibleNotesError,
     offline_note_modification,
     offline_note_review,
+    note_layout_report,
     request_note_modification,
     review_note_modification,
     validate_raster_policy,
@@ -43,7 +44,14 @@ def _parser() -> argparse.ArgumentParser:
         help="Offline deterministic execution or explicitly authorized OpenAI execution",
     )
     parser.add_argument("--model", default="gpt-5.5")
-    parser.add_argument("--review-iterations", type=int, default=1)
+    parser.add_argument("--review-iterations", type=int, default=2)
+    parser.add_argument(
+        "--layout-mode",
+        choices=["auto", "local", "global"],
+        default="auto",
+        help="Preserve layout, reflow the affected region, or require neighboring-section reflow",
+    )
+    parser.add_argument("--minimum-body-font-size", type=float, default=7.0)
     parser.add_argument("--raster-policy", choices=["none", "photos-only", "allow"], default="none")
     parser.add_argument("--font-policy", choices=["portable", "exact"], default="portable")
     parser.add_argument("--powerpoint-validation", choices=["off", "auto", "required"], default="auto")
@@ -92,10 +100,12 @@ def modify(args: argparse.Namespace) -> dict[str, object]:
         review = None
         maximum_iterations = 0 if args.engine == "offline" else args.review_iterations
         for iteration in range(maximum_iterations + 1):
+            previous_spec = current_spec
             if args.engine == "offline":
                 current_spec, patch = offline_note_modification(
                     current_spec,
                     supplemental_instruction=args.instruction,
+                    minimum_font_size_pt=args.minimum_body_font_size,
                 )
             else:
                 current_spec, patch = request_note_modification(
@@ -110,6 +120,8 @@ def modify(args: argparse.Namespace) -> dict[str, object]:
                     previous_review=review,
                     timeout_seconds=args.timeout,
                     max_output_tokens=args.max_output_tokens,
+                    minimum_font_size_pt=args.minimum_body_font_size,
+                    layout_mode=args.layout_mode,
                 )
             current_spec, substitutions = apply_font_policy(current_spec, args.font_policy)
             validate_raster_policy(current_spec, args.raster_policy)
@@ -129,15 +141,25 @@ def modify(args: argparse.Namespace) -> dict[str, object]:
                 timeout_seconds=args.timeout,
             )
             audit = audit_pptx(candidate, current_spec)
+            layout = note_layout_report(
+                previous_spec,
+                current_spec,
+                patch,
+                minimum_font_size_pt=args.minimum_body_font_size,
+                layout_mode=args.layout_mode,
+            )
             patches.append(
                 {
                     "iteration": iteration,
                     "detected_notes": patch.detected_notes,
                     "instruction_summary": patch.instruction_summary,
+                    "actions": [item.model_dump(mode="json") for item in patch.actions],
+                    "layout_strategy": patch.layout_strategy,
                     "removed_element_ids": patch.remove_element_ids,
                     "upserted_element_ids": [item.id for item in patch.upsert_elements],
                     "font_substitutions": substitutions,
                     "audit": audit,
+                    "layout_report": layout,
                 }
             )
             review = (
@@ -150,18 +172,52 @@ def modify(args: argparse.Namespace) -> dict[str, object]:
                     model=args.model,
                     supplemental_instruction=args.instruction,
                     timeout_seconds=args.timeout,
+                    layout_report=layout,
                 )
             )
+            if not layout["valid"]:
+                payload = review.model_dump(mode="json")
+                payload["dependent_objects_adjusted"] = bool(
+                    layout["dependent_objects_adjusted"]
+                )
+                payload["minimum_font_size_ok"] = not bool(layout["undersized_text_ids"])
+                payload["balanced_density"] = not bool(layout["text_fit_issue_ids"])
+                payload["issues"] = list(
+                    dict.fromkeys([*payload["issues"], *layout["issues"]])
+                )[:16]
+                repair = "; ".join(payload["issues"])
+                payload["repair_instruction"] = (
+                    f"{payload['repair_instruction']}; {repair}"
+                    if payload["repair_instruction"]
+                    else repair
+                )
+                review = type(review).model_validate(payload)
             reviews.append(review.model_dump(mode="json"))
             if (
                 review.instruction_fulfilled
                 and review.visible_notes_removed
                 and review.layout_preserved
+                and review.dependent_objects_adjusted
+                and review.minimum_font_size_ok
+                and review.balanced_density
             ):
                 break
 
         if rendered is None:
             raise VisibleNotesError("No modified slide candidate was produced")
+        if review is None or not (
+            review.instruction_fulfilled
+            and review.visible_notes_removed
+            and review.layout_preserved
+            and review.dependent_objects_adjusted
+            and review.minimum_font_size_ok
+            and review.balanced_density
+        ):
+            issues = "; ".join(review.issues if review is not None else [])
+            raise VisibleNotesError(
+                "Modified slide failed semantic/layout review"
+                + (f": {issues}" if issues else "")
+            )
         final_dir = workspace / f"note-edit-{len(patches) - 1:03d}"
         final_candidate = final_dir / "candidate.pptx"
         output.parent.mkdir(parents=True, exist_ok=True)
@@ -184,6 +240,8 @@ def modify(args: argparse.Namespace) -> dict[str, object]:
             "model": args.model,
             "engine": args.engine,
             "supplemental_instruction": args.instruction,
+            "layout_mode": args.layout_mode,
+            "minimum_body_font_size": args.minimum_body_font_size,
             "patches": patches,
             "reviews": reviews,
             "audit": final_audit,

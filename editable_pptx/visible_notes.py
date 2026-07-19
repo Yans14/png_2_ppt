@@ -32,6 +32,19 @@ colors, and section geometry. Use existing IDs when changing existing objects. U
 descriptive IDs only for genuinely new objects. Return only changed/new objects in
 upsert_elements and only deleted IDs in remove_element_ids.
 
+Classify each instruction as one or more actions: add/remove rows; replace text or
+values; delete, move, resize, recolor, restyle, add, or duplicate objects; add/remove a
+section; update chart/table/comment content; resolve placeholders; or global reflow.
+Populate actions with exact target IDs and mark requires_reflow whenever content count,
+text length, or section geometry changes.
+
+Layout adaptation is mandatory when content density changes. Do not solve added content
+only by shrinking it. First reclaim spacing, then resize/move dependent sections and all
+their labels, bars, values, comments, rules, and backgrounds as one system. Preserve the
+slide canvas and footer. Use global_reflow when adjacent sections must move or resize.
+Respect supplied minimum font size for affected body content. A repeated row must have
+enough height for its complete label and values without clipping or overlapping.
+
 For repeated rows or table-like sections:
 - infer row templates from neighboring objects;
 - keep the section inside its existing vertical bounds unless the note explicitly asks
@@ -54,9 +67,12 @@ visible production note. Return strict review data only.
 
 Confirm that every requested edit is present, production-note artifacts are gone,
 repeated rows are complete and evenly spaced, labels remain readable, and unrelated
-layout is preserved. Do not require pixel similarity to the original because the edit
-intentionally changes the slide. If any requirement fails, provide one concise repair
-instruction naming exact missing or incorrect objects.
+layout is preserved. When global reflow was requested, confirm neighboring sections and
+all dependent objects moved or resized coherently. Reject candidates that fit new content
+only by using text below the supplied minimum or by creating excessive density. Do not
+require pixel similarity to the original because the edit intentionally changes the
+slide. If any requirement fails, provide one concise repair instruction naming exact
+missing or incorrect objects.
 """.strip()
 
 
@@ -103,10 +119,84 @@ def _copy_element(template: object, **updates: object) -> dict[str, object]:
     return payload
 
 
+def note_layout_report(
+    before: SlideSpec,
+    after: SlideSpec,
+    patch: SlideNotePatch,
+    *,
+    minimum_font_size_pt: float,
+    layout_mode: str = "auto",
+) -> dict[str, object]:
+    """Measure readability and dependency reflow for a structural note edit."""
+
+    touched_ids = {item.id for item in patch.upsert_elements}
+    removed_ids = set(patch.remove_element_ids)
+    after_map = {item.id: item for item in after.elements}
+    before_ids = {item.id for item in before.elements}
+    primary_target_ids = {
+        target
+        for action in patch.actions
+        if action.action_type != "global_reflow"
+        for target in action.target_ids
+    }
+    note_ids = {
+        item.id
+        for item in before.elements
+        if isinstance(item, TextElement) and item.text in patch.detected_notes
+    }
+    undersized: list[str] = []
+    text_fit: list[str] = []
+    for element_id in touched_ids:
+        element = after_map.get(element_id)
+        if not isinstance(element, TextElement):
+            continue
+        identity = f"{element.id} {element.name}".lower()
+        exempt = any(
+            token in identity
+            for token in ("footer", "source", "page_number", "confidential")
+        )
+        if not exempt and element.font_size_pt + 1e-6 < minimum_font_size_pt:
+            undersized.append(element.id)
+        lines = max(1, len(element.text.splitlines()))
+        estimated_height = lines * element.font_size_pt * 1.333 * element.line_spacing
+        if estimated_height > element.bounds.height * 1.15:
+            text_fit.append(element.id)
+
+    requires_reflow = layout_mode == "global" or any(
+        action.requires_reflow for action in patch.actions
+    )
+    changed_existing = (touched_ids & before_ids) | (removed_ids & before_ids)
+    dependent_changes = sorted(changed_existing - primary_target_ids - note_ids)
+    dependent_adjusted = not requires_reflow or bool(dependent_changes)
+    valid = not undersized and not text_fit and dependent_adjusted
+    issues: list[str] = []
+    if undersized:
+        issues.append(
+            f"Text below {minimum_font_size_pt:.1f}pt: " + ", ".join(undersized[:12])
+        )
+    if text_fit:
+        issues.append("Likely clipped text: " + ", ".join(text_fit[:12]))
+    if not dependent_adjusted:
+        issues.append(
+            "Content density changed but no neighboring existing objects were reflowed"
+        )
+    return {
+        "valid": valid,
+        "minimum_font_size_pt": minimum_font_size_pt,
+        "undersized_text_ids": undersized,
+        "text_fit_issue_ids": text_fit,
+        "requires_reflow": requires_reflow,
+        "dependent_objects_adjusted": dependent_adjusted,
+        "dependent_changed_ids": dependent_changes,
+        "issues": issues,
+    }
+
+
 def offline_note_modification(
     spec: SlideSpec,
     *,
     supplemental_instruction: str | None = None,
+    minimum_font_size_pt: float = 7.0,
 ) -> tuple[SlideSpec, SlideNotePatch]:
     """Execute locally supported visible-note patterns without sending slide data out."""
 
@@ -227,7 +317,7 @@ def offline_note_modification(
                     "height": label_height,
                 },
                 text=label_text,
-                font_size_pt=6.5,
+                font_size_pt=minimum_font_size_pt,
                 line_spacing=0.95,
             )
         )
@@ -299,6 +389,16 @@ def offline_note_modification(
             "instruction_summary": (
                 f"Expanded TRADING COMPARABLES to {target_rows} editable orange rows and removed note"
             ),
+            "actions": [
+                {
+                    "action_type": "add_rows",
+                    "instruction": f"Expand trading comparables to {target_rows} rows",
+                    "target_ids": [item.id for item in label_rows],
+                    "requires_reflow": True,
+                }
+            ],
+            "layout_strategy": "local_reflow",
+            "minimum_font_size_pt": minimum_font_size_pt,
             "background": None,
             "upsert_components": [],
             "remove_component_ids": [],
@@ -330,6 +430,9 @@ def offline_note_review(spec: SlideSpec, patch: SlideNotePatch) -> SlideNoteRevi
         instruction_fulfilled=len(row_ids) == requested,
         visible_notes_removed=not notes_remaining,
         layout_preserved=True,
+        dependent_objects_adjusted=True,
+        minimum_font_size_ok=True,
+        balanced_density=True,
         issues=issues,
         repair_instruction=None if not issues else "; ".join(issues),
     )
@@ -340,6 +443,8 @@ def note_modification_prompt(
     *,
     supplemental_instruction: str | None = None,
     previous_review: SlideNoteReview | None = None,
+    minimum_font_size_pt: float = 7.5,
+    layout_mode: str = "auto",
 ) -> str:
     instruction = supplemental_instruction.strip() if supplemental_instruction else ""
     review_text = ""
@@ -352,6 +457,8 @@ def note_modification_prompt(
         "Inspect the slide image and current object graph. Detect visible production notes, "
         "execute them, and remove their visual artifacts.\n"
         f"Supplemental user instruction: {instruction or 'none; use visible notes only'}\n"
+        f"Layout mode: {layout_mode}. Minimum affected body font size: "
+        f"{minimum_font_size_pt:.1f} pt.\n"
         f"Current editable spec:\n{spec.model_dump_json()}"
         f"{review_text}"
     )
@@ -367,6 +474,8 @@ def request_note_modification(
     api_key: str | None = None,
     timeout_seconds: int = 300,
     max_output_tokens: int = 64000,
+    minimum_font_size_pt: float = 7.5,
+    layout_mode: str = "auto",
 ) -> tuple[SlideSpec, SlideNotePatch]:
     try:
         patch = request_structured_response(
@@ -377,6 +486,8 @@ def request_note_modification(
                 spec,
                 supplemental_instruction=supplemental_instruction,
                 previous_review=previous_review,
+                minimum_font_size_pt=minimum_font_size_pt,
+                layout_mode=layout_mode,
             ),
             image_paths=[source_image],
             model=model,
@@ -404,11 +515,13 @@ def review_note_modification(
     api_key: str | None = None,
     timeout_seconds: int = 300,
     max_output_tokens: int = 12000,
+    layout_report: dict[str, object] | None = None,
 ) -> SlideNoteReview:
     user_text = (
         f"Executed notes: {json.dumps(patch.detected_notes, ensure_ascii=False)}\n"
         f"Instruction summary: {patch.instruction_summary}\n"
         f"Supplemental instruction: {supplemental_instruction or 'none'}\n"
+        f"Local layout checks: {json.dumps(layout_report or {}, ensure_ascii=False)}\n"
         f"Final editable spec: {spec.model_dump_json()}"
     )
     try:

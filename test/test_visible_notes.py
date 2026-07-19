@@ -2,8 +2,12 @@ from __future__ import annotations
 
 import unittest
 
-from editable_pptx.models import SlideNotePatch, SlideSpec, apply_slide_patch
-from editable_pptx.visible_notes import note_modification_prompt, validate_raster_policy
+from editable_pptx.models import SlideNoteAction, SlideNotePatch, SlideSpec, apply_slide_patch
+from editable_pptx.visible_notes import (
+    note_layout_report,
+    note_modification_prompt,
+    validate_raster_policy,
+)
 
 
 def note_spec() -> SlideSpec:
@@ -72,6 +76,41 @@ def note_spec() -> SlideSpec:
 
 
 class VisibleNotesTests(unittest.TestCase):
+    def test_note_action_schema_supports_broad_edit_families(self) -> None:
+        action_types = {
+            "add_rows",
+            "remove_rows",
+            "replace_text",
+            "replace_values",
+            "delete_objects",
+            "move_objects",
+            "resize_objects",
+            "recolor",
+            "restyle",
+            "add_objects",
+            "duplicate_objects",
+            "add_section",
+            "remove_section",
+            "update_chart",
+            "update_table",
+            "update_comments",
+            "resolve_placeholders",
+            "global_reflow",
+            "other",
+        }
+
+        parsed = {
+            SlideNoteAction(
+                action_type=action_type,
+                instruction="Apply edit",
+                target_ids=[],
+                requires_reflow=action_type in {"add_rows", "global_reflow"},
+            ).action_type
+            for action_type in action_types
+        }
+
+        self.assertEqual(parsed, action_types)
+
     def test_structural_patch_can_touch_more_than_refinement_limit(self) -> None:
         base = note_spec()
         row_template = base.elements[1].model_dump(mode="json")
@@ -92,6 +131,16 @@ class VisibleNotesTests(unittest.TestCase):
             {
                 "detected_notes": ["Add four rows"],
                 "instruction_summary": "Expanded table to seven rows",
+                "actions": [
+                    {
+                        "action_type": "add_rows",
+                        "instruction": "Add four rows",
+                        "target_ids": ["note_text"],
+                        "requires_reflow": True,
+                    }
+                ],
+                "layout_strategy": "local_reflow",
+                "minimum_font_size_pt": 7,
                 "background": None,
                 "upsert_components": [],
                 "remove_component_ids": [],
@@ -107,6 +156,9 @@ class VisibleNotesTests(unittest.TestCase):
         self.assertNotIn("note_text", {item.id for item in result.elements})
         self.assertEqual(result.reconstruction_notes, ["Visible note executed"])
 
+        report = note_layout_report(base, result, patch, minimum_font_size_pt=7)
+        self.assertTrue(report["minimum_font_size_pt"] == 7)
+
     def test_prompt_includes_visible_note_and_supplemental_instruction(self) -> None:
         prompt = note_modification_prompt(
             note_spec(), supplemental_instruction="Preserve footer"
@@ -114,6 +166,7 @@ class VisibleNotesTests(unittest.TestCase):
 
         self.assertIn("Add four rows", prompt)
         self.assertIn("Preserve footer", prompt)
+        self.assertIn("Minimum affected body font size", prompt)
 
     def test_raster_none_accepts_native_note_edit(self) -> None:
         validate_raster_policy(note_spec(), "none")
