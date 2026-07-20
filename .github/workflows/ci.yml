@@ -17,8 +17,11 @@ jobs:
           node-version: "20"
           cache: npm
       - run: npm ci
-      - run: pip install -e . build
+      - run: pip install -e '.[api,agents]' build
+      - run: python scripts/check_public_repo_safety.py
       - run: npm run test:all
+      - run: npm run benchmark:beautify:fixtures
+      - run: python -c "from pathlib import Path; from editable_pptx.powerpoint import validate_ooxml; decks=list(Path('benchmarks/cache/beautify-v1').glob('*.pptx')); assert len(decks) == 20; assert all(validate_ooxml(deck)['compatible'] for deck in decks)"
       - run: python -m build --wheel
       - run: python scripts/render_compatibility_fixture.py --output /tmp/powerpoint-compatibility.pptx
       - run: python scripts/validate_powerpoint.py /tmp/powerpoint-compatibility.pptx --mode off

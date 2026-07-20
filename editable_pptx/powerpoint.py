@@ -218,6 +218,10 @@ def _inspect_slide_xml(
         if count > 1
     )
     for extent in root.findall(f".//{{{DML_NS}}}ext"):
+        # a:ext is also used by extension lists, where it carries a URI rather
+        # than geometry. Only transform extents have cx/cy coordinates.
+        if "cx" not in extent.attrib and "cy" not in extent.attrib:
+            continue
         cx = _integer_or_none(extent.attrib.get("cx"))
         cy = _integer_or_none(extent.attrib.get("cy"))
         if cx is None or cy is None or cx < 0 or cy < 0:

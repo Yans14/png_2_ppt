@@ -5,6 +5,7 @@ import json
 import os
 import re
 import tempfile
+import uuid
 import zipfile
 from collections import Counter
 from pathlib import Path, PurePosixPath
@@ -16,6 +17,7 @@ from .powerpoint import validate_ooxml
 from .service_models import (
     PptxPatchOperation,
     PptxPatchPlan,
+    PptxSectionOperation,
     ProductionInstruction,
     ShapeSnapshot,
 )
@@ -26,11 +28,14 @@ DML = "http://schemas.openxmlformats.org/drawingml/2006/main"
 REL = "http://schemas.openxmlformats.org/officeDocument/2006/relationships"
 PKG_REL = "http://schemas.openxmlformats.org/package/2006/relationships"
 CONTENT_TYPES = "http://schemas.openxmlformats.org/package/2006/content-types"
+P14 = "http://schemas.microsoft.com/office/powerpoint/2010/main"
+SECTION_EXTENSION_URI = "{521415D9-36F7-43E2-AB2F-B90AF26B5E84}"
 EMU_PER_POINT = 12700
 
 ET.register_namespace("a", DML)
 ET.register_namespace("p", PML)
 ET.register_namespace("r", REL)
+ET.register_namespace("p14", P14)
 
 
 class OoxmlEditError(RuntimeError):
@@ -367,6 +372,11 @@ def apply_ooxml_patch(
 
     with zipfile.ZipFile(source, "r") as input_zip:
         slides = slide_part_names(input_zip)
+        chart_operations = _chart_operations_by_part(
+            input_zip,
+            slides,
+            operations_by_slide,
+        )
         with tempfile.NamedTemporaryFile(
             prefix="editable-pptx-patch-", suffix=".pptx", delete=False, dir=output.parent
         ) as temporary_handle:
@@ -387,6 +397,10 @@ def apply_ooxml_patch(
                         data = _remove_note_texts(data, note_texts)
                     elif member.startswith("ppt/comments/") and member.endswith(".xml") and comment_texts:
                         data = _remove_comment_texts(data, comment_texts)
+                    elif member in chart_operations:
+                        data = _patch_chart_xml(data, chart_operations[member])
+                    elif member == "ppt/presentation.xml" and plan.section_operations:
+                        data = _patch_sections(data, plan.section_operations)
                     output_zip.writestr(info, data)
             os.replace(temporary, output)
         finally:
@@ -396,6 +410,106 @@ def apply_ooxml_patch(
         output.unlink(missing_ok=True)
         raise OoxmlEditError("patched PowerPoint failed OOXML validation: " + "; ".join(validation["errors"]))
     return output
+
+
+def _patch_sections(data: bytes, operations: list[PptxSectionOperation]) -> bytes:
+    """Apply native PowerPoint section mutations in the p14 extension list."""
+
+    root = ET.fromstring(data)
+    slide_ids = root.findall(f"./{{{PML}}}sldIdLst/{{{PML}}}sldId")
+    slide_id_by_index = {
+        index: item.attrib["id"]
+        for index, item in enumerate(slide_ids, start=1)
+        if item.attrib.get("id")
+    }
+    extension_list = root.find(f"{{{PML}}}extLst")
+    if extension_list is None:
+        extension_list = ET.SubElement(root, f"{{{PML}}}extLst")
+    extension = next(
+        (
+            item
+            for item in extension_list.findall(f"{{{PML}}}ext")
+            if item.attrib.get("uri") == SECTION_EXTENSION_URI
+        ),
+        None,
+    )
+    section_list = (
+        extension.find(f"{{{P14}}}sectionLst")
+        if extension is not None
+        else None
+    )
+    if section_list is None:
+        if extension is None:
+            extension = ET.SubElement(
+                extension_list,
+                f"{{{PML}}}ext",
+                {"uri": SECTION_EXTENSION_URI},
+            )
+        section_list = ET.SubElement(extension, f"{{{P14}}}sectionLst")
+
+    def find_section(name: str) -> ET.Element | None:
+        return next(
+            (
+                item
+                for item in section_list.findall(f"{{{P14}}}section")
+                if item.attrib.get("name", "").casefold() == name.casefold()
+            ),
+            None,
+        )
+
+    def remove_slide_ids(identifiers: set[str]) -> None:
+        for section in list(section_list.findall(f"{{{P14}}}section")):
+            identifier_list = section.find(f"{{{P14}}}sldIdLst")
+            if identifier_list is None:
+                continue
+            for slide_id in list(identifier_list.findall(f"{{{P14}}}sldId")):
+                if slide_id.attrib.get("id") in identifiers:
+                    identifier_list.remove(slide_id)
+            if not list(identifier_list):
+                section_list.remove(section)
+
+    for operation in operations:
+        if operation.action == "remove":
+            existing = find_section(operation.name)
+            if existing is None:
+                raise OoxmlEditError(f"PowerPoint section not found: {operation.name}")
+            section_list.remove(existing)
+            continue
+        if operation.action == "rename":
+            existing = find_section(operation.name)
+            if existing is None:
+                raise OoxmlEditError(f"PowerPoint section not found: {operation.name}")
+            existing.attrib["name"] = operation.new_name or operation.name
+            continue
+
+        identifiers: list[str] = []
+        for slide_index in operation.slide_indices:
+            identifier = slide_id_by_index.get(slide_index)
+            if identifier is None:
+                raise OoxmlEditError(
+                    f"PowerPoint section targets unknown slide {slide_index}"
+                )
+            identifiers.append(identifier)
+        if find_section(operation.name) is not None:
+            raise OoxmlEditError(f"PowerPoint section already exists: {operation.name}")
+        remove_slide_ids(set(identifiers))
+        section = ET.SubElement(
+            section_list,
+            f"{{{P14}}}section",
+            {"name": operation.name, "id": "{" + str(uuid.uuid4()).upper() + "}"},
+        )
+        identifier_list = ET.SubElement(section, f"{{{P14}}}sldIdLst")
+        for identifier in identifiers:
+            ET.SubElement(identifier_list, f"{{{P14}}}sldId", {"id": identifier})
+
+    if not list(section_list):
+        assert extension is not None
+        extension.remove(section_list)
+        if not list(extension):
+            extension_list.remove(extension)
+        if not list(extension_list):
+            root.remove(extension_list)
+    return ET.tostring(root, encoding="utf-8", xml_declaration=True)
 
 
 def _patch_slide_xml(data: bytes, operations: list[PptxPatchOperation], remove_ids: set[int]) -> bytes:
@@ -432,6 +546,33 @@ def _patch_slide_xml(data: bytes, operations: list[PptxPatchOperation], remove_i
             _apply_color(node, operation.color or "#000000")
         elif operation.action == "set_font_size":
             _apply_font_size(node, operation.font_size_pt or 7.5)
+        elif operation.action == "align":
+            _apply_alignment(root, operation)
+        elif operation.action == "distribute":
+            _apply_distribution(root, operation)
+        elif operation.action == "set_typography":
+            _apply_typography(node, operation)
+        elif operation.action == "set_paragraph":
+            _apply_paragraph(node, operation)
+        elif operation.action == "set_fill":
+            _apply_color(node, operation.color or "#000000")
+        elif operation.action == "set_border":
+            _apply_border(node, operation)
+        elif operation.action in {"bring_to_front", "send_to_back"}:
+            _apply_z_order(root, node, operation.action)
+        elif operation.action == "crop_picture":
+            _apply_picture_crop(node, operation)
+        elif operation.action == "style_table":
+            _apply_table_style(node, operation)
+        elif operation.action == "style_chart":
+            # The related chart part is patched separately at package level.
+            pass
+        elif operation.action == "group":
+            assert operation.new_shape_id is not None
+            if operation.new_shape_id in existing_ids:
+                raise OoxmlEditError(f"group shape id {operation.new_shape_id} already exists")
+            _group_shapes(root, operation)
+            existing_ids.add(operation.new_shape_id)
         elif operation.action == "duplicate":
             assert operation.new_shape_id is not None
             if operation.new_shape_id in existing_ids:
@@ -449,6 +590,44 @@ def _patch_slide_xml(data: bytes, operations: list[PptxPatchOperation], remove_i
             parent.insert(list(parent).index(node) + 1, duplicate)
             existing_ids.add(operation.new_shape_id)
     return ET.tostring(root, encoding="utf-8", xml_declaration=True)
+
+
+def _group_shapes(root: ET.Element, operation: PptxPatchOperation) -> None:
+    nodes = _operation_nodes(root, operation)
+    parents = _parent_map(root)
+    parent = parents.get(nodes[0])
+    if parent is None or any(parents.get(node) is not parent for node in nodes):
+        raise OoxmlEditError("group members must share the same native parent")
+    transforms = [_numeric_transform(node) for node in nodes]
+    left = min(item[0] for item in transforms)
+    top = min(item[1] for item in transforms)
+    right = max(item[0] + item[2] for item in transforms)
+    bottom = max(item[1] + item[3] for item in transforms)
+    width = max(1, right - left)
+    height = max(1, bottom - top)
+    insertion_index = min(list(parent).index(node) for node in nodes)
+    group = ET.Element(f"{{{PML}}}grpSp")
+    non_visual = ET.SubElement(group, f"{{{PML}}}nvGrpSpPr")
+    ET.SubElement(
+        non_visual,
+        f"{{{PML}}}cNvPr",
+        {
+            "id": str(operation.new_shape_id),
+            "name": operation.new_name or f"Editable group {operation.new_shape_id}",
+        },
+    )
+    ET.SubElement(non_visual, f"{{{PML}}}cNvGrpSpPr")
+    ET.SubElement(non_visual, f"{{{PML}}}nvPr")
+    properties = ET.SubElement(group, f"{{{PML}}}grpSpPr")
+    transform = ET.SubElement(properties, f"{{{DML}}}xfrm")
+    ET.SubElement(transform, f"{{{DML}}}off", {"x": str(left), "y": str(top)})
+    ET.SubElement(transform, f"{{{DML}}}ext", {"cx": str(width), "cy": str(height)})
+    ET.SubElement(transform, f"{{{DML}}}chOff", {"x": str(left), "y": str(top)})
+    ET.SubElement(transform, f"{{{DML}}}chExt", {"cx": str(width), "cy": str(height)})
+    for node in nodes:
+        parent.remove(node)
+        group.append(node)
+    parent.insert(insertion_index, group)
 
 
 def _parent_map(root: ET.Element) -> dict[ET.Element, ET.Element]:
@@ -532,6 +711,267 @@ def _apply_font_size(node: ET.Element, size_pt: float) -> None:
         raise OoxmlEditError("shape has no editable text formatting")
     for properties in text_properties:
         properties.attrib["sz"] = str(round(size_pt * 100))
+
+
+def _operation_nodes(root: ET.Element, operation: PptxPatchOperation) -> list[ET.Element]:
+    identifiers = [operation.target_shape_id, *operation.peer_shape_ids]
+    nodes: list[ET.Element] = []
+    for identifier in dict.fromkeys(identifiers):
+        node = _find_shape(root, identifier)
+        if node is None:
+            raise OoxmlEditError(
+                f"shape {identifier} not found for {operation.action} on slide {operation.slide_index}"
+            )
+        nodes.append(node)
+    if len(nodes) < 2:
+        raise OoxmlEditError(f"{operation.action} requires at least two shapes")
+    return nodes
+
+
+def _numeric_transform(node: ET.Element) -> tuple[int, int, int, int]:
+    offset, extent = _transform_nodes(node)
+    if offset is None or extent is None:
+        raise OoxmlEditError("shape has no editable transform")
+    return (
+        int(offset.attrib.get("x", "0")),
+        int(offset.attrib.get("y", "0")),
+        int(extent.attrib.get("cx", "0")),
+        int(extent.attrib.get("cy", "0")),
+    )
+
+
+def _apply_alignment(root: ET.Element, operation: PptxPatchOperation) -> None:
+    nodes = _operation_nodes(root, operation)
+    transforms = [_numeric_transform(node) for node in nodes]
+    alignment = operation.alignment or "left"
+    if alignment == "left":
+        target = min(item[0] for item in transforms)
+    elif alignment == "center":
+        target = round(sum(item[0] + item[2] / 2 for item in transforms) / len(transforms))
+    elif alignment == "right":
+        target = max(item[0] + item[2] for item in transforms)
+    elif alignment == "top":
+        target = min(item[1] for item in transforms)
+    elif alignment == "middle":
+        target = round(sum(item[1] + item[3] / 2 for item in transforms) / len(transforms))
+    else:
+        target = max(item[1] + item[3] for item in transforms)
+    for node, (x, y, width, height) in zip(nodes, transforms):
+        offset, _ = _transform_nodes(node)
+        assert offset is not None
+        if alignment == "left":
+            offset.attrib["x"] = str(target)
+        elif alignment == "center":
+            offset.attrib["x"] = str(round(target - width / 2))
+        elif alignment == "right":
+            offset.attrib["x"] = str(target - width)
+        elif alignment == "top":
+            offset.attrib["y"] = str(target)
+        elif alignment == "middle":
+            offset.attrib["y"] = str(round(target - height / 2))
+        else:
+            offset.attrib["y"] = str(target - height)
+
+
+def _apply_distribution(root: ET.Element, operation: PptxPatchOperation) -> None:
+    nodes = _operation_nodes(root, operation)
+    horizontal = operation.distribution == "horizontal"
+    nodes.sort(key=lambda node: _numeric_transform(node)[0 if horizontal else 1])
+    transforms = [_numeric_transform(node) for node in nodes]
+    first = transforms[0]
+    last = transforms[-1]
+    leading = first[0 if horizontal else 1]
+    trailing = last[0 if horizontal else 1] + last[2 if horizontal else 3]
+    occupied = sum(item[2 if horizontal else 3] for item in transforms)
+    gap = (trailing - leading - occupied) / max(1, len(nodes) - 1)
+    cursor = float(leading)
+    for node, transform in zip(nodes, transforms):
+        offset, _ = _transform_nodes(node)
+        assert offset is not None
+        offset.attrib["x" if horizontal else "y"] = str(round(cursor))
+        cursor += transform[2 if horizontal else 3] + gap
+
+
+def _text_property_nodes(node: ET.Element) -> list[ET.Element]:
+    properties = node.findall(f".//{{{DML}}}rPr") + node.findall(f".//{{{DML}}}defRPr")
+    if not properties:
+        for paragraph in node.findall(f".//{{{DML}}}p"):
+            end = paragraph.find(f"{{{DML}}}endParaRPr")
+            if end is None:
+                end = ET.SubElement(paragraph, f"{{{DML}}}endParaRPr")
+            properties.append(end)
+    return properties
+
+
+def _set_text_color(properties: ET.Element, color: str) -> None:
+    normalized = color.removeprefix("#").upper()
+    if not re.fullmatch(r"[0-9A-F]{6}", normalized):
+        raise OoxmlEditError(f"invalid RGB color: {color}")
+    for child in list(properties):
+        if child.tag in {
+            f"{{{DML}}}solidFill",
+            f"{{{DML}}}gradFill",
+            f"{{{DML}}}noFill",
+        }:
+            properties.remove(child)
+    solid = ET.SubElement(properties, f"{{{DML}}}solidFill")
+    ET.SubElement(solid, f"{{{DML}}}srgbClr", {"val": normalized})
+
+
+def _apply_typography(node: ET.Element, operation: PptxPatchOperation) -> None:
+    properties = _text_property_nodes(node)
+    if not properties:
+        raise OoxmlEditError("shape has no editable typography")
+    for item in properties:
+        if operation.font_size_pt is not None:
+            item.attrib["sz"] = str(round(operation.font_size_pt * 100))
+        if operation.bold is not None:
+            item.attrib["b"] = "1" if operation.bold else "0"
+        if operation.italic is not None:
+            item.attrib["i"] = "1" if operation.italic else "0"
+        if operation.font_family:
+            latin = item.find(f"{{{DML}}}latin")
+            if latin is None:
+                latin = ET.SubElement(item, f"{{{DML}}}latin")
+            latin.attrib["typeface"] = operation.font_family
+        if operation.text_color:
+            _set_text_color(item, operation.text_color)
+
+
+def _apply_paragraph(node: ET.Element, operation: PptxPatchOperation) -> None:
+    mapping = {"left": "l", "center": "ctr", "right": "r", "justify": "just"}
+    paragraphs = node.findall(f".//{{{DML}}}p")
+    if not paragraphs:
+        raise OoxmlEditError("shape has no editable paragraphs")
+    for paragraph in paragraphs:
+        properties = paragraph.find(f"{{{DML}}}pPr")
+        if properties is None:
+            properties = ET.Element(f"{{{DML}}}pPr")
+            paragraph.insert(0, properties)
+        properties.attrib["algn"] = mapping[operation.paragraph_alignment or "left"]
+
+
+def _apply_border(node: ET.Element, operation: PptxPatchOperation) -> None:
+    properties = node.find(f"{{{PML}}}spPr")
+    if properties is None:
+        properties = node.find(f"{{{PML}}}grpSpPr")
+    if properties is None:
+        raise OoxmlEditError("shape has no editable border properties")
+    line = properties.find(f"{{{DML}}}ln")
+    if line is None:
+        line = ET.SubElement(properties, f"{{{DML}}}ln")
+    if operation.border_width_pt is not None:
+        line.attrib["w"] = str(round(operation.border_width_pt * EMU_PER_POINT))
+    _set_text_color(line, operation.border_color or "#000000")
+
+
+def _apply_z_order(root: ET.Element, node: ET.Element, action: str) -> None:
+    parent = _parent_map(root).get(node)
+    if parent is None:
+        raise OoxmlEditError("shape has no z-order parent")
+    parent.remove(node)
+    if action == "bring_to_front":
+        parent.append(node)
+    else:
+        # Keep p:nvGrpSpPr and p:grpSpPr at the start of the shape tree.
+        index = min(2, len(parent))
+        parent.insert(index, node)
+
+
+def _apply_picture_crop(node: ET.Element, operation: PptxPatchOperation) -> None:
+    if node.tag != f"{{{PML}}}pic":
+        raise OoxmlEditError("crop_picture requires a native picture shape")
+    blip_fill = node.find(f"{{{PML}}}blipFill")
+    if blip_fill is None:
+        raise OoxmlEditError("picture has no blip fill")
+    source_rect = blip_fill.find(f"{{{DML}}}srcRect")
+    if source_rect is None:
+        source_rect = ET.SubElement(blip_fill, f"{{{DML}}}srcRect")
+    mapping = {
+        "l": operation.crop_left,
+        "t": operation.crop_top,
+        "r": operation.crop_right,
+        "b": operation.crop_bottom,
+    }
+    for key, value in mapping.items():
+        if value is not None:
+            source_rect.attrib[key] = str(round(value * 100000))
+
+
+def _apply_table_style(node: ET.Element, operation: PptxPatchOperation) -> None:
+    table = node.find(f".//{{{DML}}}tbl")
+    if table is None:
+        raise OoxmlEditError("style_table requires a native table")
+    colors = operation.accent_colors or ([operation.color] if operation.color else [])
+    if not colors:
+        raise OoxmlEditError("style_table requires color or accent_colors")
+    for index, cell in enumerate(table.findall(f".//{{{DML}}}tc")):
+        properties = cell.find(f"{{{DML}}}tcPr")
+        if properties is None:
+            properties = ET.SubElement(cell, f"{{{DML}}}tcPr")
+        normalized = colors[index % len(colors)].removeprefix("#").upper()
+        for fill in list(properties):
+            if fill.tag.endswith("Fill"):
+                properties.remove(fill)
+        solid = ET.SubElement(properties, f"{{{DML}}}solidFill")
+        ET.SubElement(solid, f"{{{DML}}}srgbClr", {"val": normalized})
+
+
+def _chart_operations_by_part(
+    archive: zipfile.ZipFile,
+    slides: list[str],
+    operations_by_slide: dict[int, list[PptxPatchOperation]],
+) -> dict[str, list[PptxPatchOperation]]:
+    result: dict[str, list[PptxPatchOperation]] = {}
+    for slide_index, operations in operations_by_slide.items():
+        chart_operations_for_slide = [item for item in operations if item.action == "style_chart"]
+        if not chart_operations_for_slide or slide_index > len(slides):
+            continue
+        part_name = slides[slide_index - 1]
+        rels_name = str(PurePosixPath(part_name).parent / "_rels" / f"{PurePosixPath(part_name).name}.rels")
+        if rels_name not in archive.namelist():
+            continue
+        rels = ET.fromstring(archive.read(rels_name))
+        targets = {
+            item.attrib.get("Id", ""): _resolve_target(part_name, item.attrib.get("Target", ""))
+            for item in rels.findall(f"{{{PKG_REL}}}Relationship")
+        }
+        root = ET.fromstring(archive.read(part_name))
+        for operation in chart_operations_for_slide:
+            node = _find_shape(root, operation.target_shape_id)
+            if node is None:
+                continue
+            chart = next((item for item in node.iter() if item.tag.rsplit("}", 1)[-1] == "chart"), None)
+            relationship_id = chart.attrib.get(f"{{{REL}}}id", "") if chart is not None else ""
+            target = targets.get(relationship_id)
+            if target:
+                result.setdefault(target, []).append(operation)
+    return result
+
+
+def _patch_chart_xml(data: bytes, operations: list[PptxPatchOperation]) -> bytes:
+    root = ET.fromstring(data)
+    for operation in operations:
+        colors = operation.accent_colors or ([operation.color] if operation.color else [])
+        if not colors:
+            continue
+        series = [item for item in root.iter() if item.tag.rsplit("}", 1)[-1] == "ser"]
+        for index, item in enumerate(series):
+            properties = next(
+                (child for child in item if child.tag.rsplit("}", 1)[-1] == "spPr"),
+                None,
+            )
+            if properties is None:
+                properties = ET.SubElement(item, f"{{{DML}}}spPr")
+            normalized = colors[index % len(colors)].removeprefix("#").upper()
+            solid = properties.find(f"{{{DML}}}solidFill")
+            if solid is None:
+                solid = ET.SubElement(properties, f"{{{DML}}}solidFill")
+            color = solid.find(f"{{{DML}}}srgbClr")
+            if color is None:
+                color = ET.SubElement(solid, f"{{{DML}}}srgbClr")
+            color.attrib["val"] = normalized
+    return ET.tostring(root, encoding="utf-8", xml_declaration=True)
 
 
 def _remove_note_texts(data: bytes, note_texts: set[str]) -> bytes:

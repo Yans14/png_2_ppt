@@ -165,12 +165,33 @@ def _validate_plan(
     shape_map = {(item.slide_index, item.shape_id): item for item in shapes}
     available = set(shape_map)
     created: set[tuple[int, int]] = set()
+    protected = set(plan.protected_shape_ids)
+    for section_operation in plan.section_operations:
+        if any(index not in selected_slides for index in section_operation.slide_indices):
+            raise PptxAgentError("section operation targets an unselected slide")
     for operation in plan.operations:
         key = (operation.slide_index, operation.target_shape_id)
         if operation.slide_index not in selected_slides:
             raise PptxAgentError(f"patch targets unselected slide {operation.slide_index}")
         if key not in available and key not in created:
             raise PptxAgentError(f"patch targets unknown shape s{key[0]}:{key[1]}")
+        for peer_shape_id in operation.peer_shape_ids:
+            peer_key = (operation.slide_index, peer_shape_id)
+            if peer_key not in available and peer_key not in created:
+                raise PptxAgentError(
+                    f"patch targets unknown peer shape s{peer_key[0]}:{peer_key[1]}"
+                )
+        if f"s{operation.slide_index}:{operation.target_shape_id}" in protected and operation.action in {
+            "delete",
+            "replace_text",
+            "duplicate",
+            "recolor",
+            "set_fill",
+            "crop_picture",
+        }:
+            raise PptxAgentError(
+                "protected shapes may not be deleted, rewritten, duplicated, recolored, or cropped"
+            )
         if plan.operation == "beautify" and operation.action in {
             "delete", "replace_text", "duplicate"
         }:
@@ -179,11 +200,37 @@ def _validate_plan(
                 raise PptxAgentError(
                     "beautification may not delete, rewrite, or duplicate content-bearing shapes"
                 )
-        if operation.action == "duplicate":
+        target = shape_map.get(key)
+        if plan.operation == "beautify" and target is not None:
+            is_logo = "logo" in f"{target.name} {target.text}".casefold()
+            if is_logo and operation.action in {
+                "recolor",
+                "set_fill",
+                "set_border",
+                "crop_picture",
+                "style_table",
+                "style_chart",
+            }:
+                raise PptxAgentError("logos may not be cropped, recolored, or restyled")
+            if is_logo and operation.action == "resize":
+                if None in {
+                    target.width_pt,
+                    target.height_pt,
+                    operation.width_pt,
+                    operation.height_pt,
+                }:
+                    raise PptxAgentError("logo resize requires width and height")
+                assert target.width_pt and target.height_pt
+                assert operation.width_pt and operation.height_pt
+                before_ratio = target.width_pt / target.height_pt
+                after_ratio = operation.width_pt / operation.height_pt
+                if abs(before_ratio - after_ratio) / before_ratio > 0.005:
+                    raise PptxAgentError("logo resize must preserve aspect ratio")
+        if operation.action in {"duplicate", "group"}:
             assert operation.new_shape_id is not None
             new_key = (operation.slide_index, operation.new_shape_id)
             if new_key in available or new_key in created:
-                raise PptxAgentError(f"duplicate shape ID already exists: s{new_key[0]}:{new_key[1]}")
+                raise PptxAgentError(f"new shape ID already exists: s{new_key[0]}:{new_key[1]}")
             created.add(new_key)
 
 
@@ -221,6 +268,16 @@ def review_patch(
 
 
 def review_approved(review: PptxPatchReview, deterministic: dict[str, Any]) -> bool:
+    selected_slides = [int(item) for item in deterministic.get("selected_slides", [])]
+    slide_scores_passed = (
+        all(
+            slide_index in review.slide_scores
+            and review.slide_scores[slide_index] >= 8
+            for slide_index in selected_slides
+        )
+        if selected_slides
+        else all(score >= 8 for score in review.slide_scores.values())
+    )
     exact_note_override = bool(
         deterministic.get("operation") == "notes"
         and deterministic.get("operation_checks_passed")
@@ -242,8 +299,26 @@ def review_approved(review: PptxPatchReview, deterministic: dict[str, Any]) -> b
         review.score >= 8 or exact_note_override,
         bool(deterministic.get("ooxml_compatible")),
         bool(deterministic.get("content_preserved")),
+        bool(deterministic.get("invariants_passed", True)),
+        bool(deterministic.get("font_sizes_passed", True)),
+        bool(deterministic.get("powerpoint_compatible", True)),
+        slide_scores_passed,
     )
     return all(required)
+
+
+def validate_patch_plan(
+    plan: PptxPatchPlan,
+    source_path: str | Path,
+    selected_slides: list[int],
+) -> None:
+    shapes = [
+        item for item in extract_shape_graph(source_path)
+        if item.slide_index in selected_slides
+    ]
+    if plan.source_sha256 != sha256_file(source_path):
+        raise PptxAgentError("planner returned the wrong source checksum")
+    _validate_plan(plan, shapes, selected_slides)
 
 
 def deterministic_checks(
@@ -284,9 +359,7 @@ def deterministic_checks(
         "ooxml_warnings": ooxml.get("warnings", []),
         "production_notes_removed": production_notes_removed,
         "operation_checks": operation_checks,
-        "operation_checks_passed": bool(operation_checks) and all(
-            item["passed"] for item in operation_checks
-        ),
+        "operation_checks_passed": all(item["passed"] for item in operation_checks),
     }
 
 
@@ -314,7 +387,7 @@ def _verify_patch_operations(
         elif operation.action == "replace_text":
             observed["text"] = result.text if result else None
             passed = result is not None and result.text == (operation.text or "")
-        elif operation.action == "recolor":
+        elif operation.action in {"recolor", "set_fill"}:
             observed["color"] = result.fill_color if result else None
             passed = result is not None and result.fill_color == operation.color
         elif operation.action == "move" and source and result:
@@ -347,10 +420,50 @@ def _verify_patch_operations(
             new_key = (operation.slide_index, operation.new_shape_id)
             passed = new_key in after
             observed["new_shape_present"] = passed
+        elif operation.action == "group" and operation.new_shape_id is not None:
+            group = after.get((operation.slide_index, operation.new_shape_id))
+            passed = group is not None and group.kind == "grpSp"
+            observed["native_group_present"] = passed
         elif operation.action == "set_font_size":
             # The OOXML editor validates and applies this scalar directly; the
             # lightweight shape graph intentionally does not duplicate run-level font data.
             passed = result is not None
+        elif operation.action in {
+            "set_typography",
+            "set_paragraph",
+            "set_border",
+            "bring_to_front",
+            "send_to_back",
+            "style_table",
+            "style_chart",
+        }:
+            passed = result is not None
+        elif operation.action == "crop_picture":
+            passed = result is not None and result.kind == "pic"
+        elif operation.action in {"align", "distribute"}:
+            peers = [
+                after.get((operation.slide_index, shape_id))
+                for shape_id in [operation.target_shape_id, *operation.peer_shape_ids]
+            ]
+            passed = len(peers) >= 2 and all(item is not None for item in peers)
+            if passed and operation.action == "align":
+                assert all(item is not None for item in peers)
+                resolved = [item for item in peers if item is not None]
+                if operation.alignment == "left":
+                    values = [item.x_pt for item in resolved]
+                elif operation.alignment == "center":
+                    values = [(item.x_pt or 0) + (item.width_pt or 0) / 2 for item in resolved]
+                elif operation.alignment == "right":
+                    values = [(item.x_pt or 0) + (item.width_pt or 0) for item in resolved]
+                elif operation.alignment == "top":
+                    values = [item.y_pt for item in resolved]
+                elif operation.alignment == "middle":
+                    values = [(item.y_pt or 0) + (item.height_pt or 0) / 2 for item in resolved]
+                else:
+                    values = [(item.y_pt or 0) + (item.height_pt or 0) for item in resolved]
+                passed = max(float(item or 0) for item in values) - min(
+                    float(item or 0) for item in values
+                ) <= tolerance
         checks.append(
             {
                 "op_id": operation.op_id,
@@ -380,5 +493,6 @@ __all__ = [
     "review_approved",
     "review_patch",
     "write_json",
+    "validate_patch_plan",
     "_selected",
 ]

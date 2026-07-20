@@ -27,7 +27,13 @@ from .service_models import (
     JobResource,
     JobStatus,
     TERMINAL_JOB_STATUSES,
+    TemplateFamilyMergeRequest,
+    TemplateFamilyResource,
+    TemplateFamilySplitRequest,
+    TemplateFamilyUpdate,
+    TemplateResource,
 )
+from .template_catalog import TemplateCatalog, TemplateCatalogError
 from .version import __version__
 from .worker import Worker
 
@@ -47,6 +53,8 @@ def create_app(
     )
     app.state.settings = settings
     app.state.store = store
+    catalog = TemplateCatalog(settings.template_catalog_home)
+    app.state.catalog = catalog
     app.state.worker = None
 
     bearer_token = os.environ.get("EDITABLE_PPTX_BEARER_TOKEN", "").strip()
@@ -67,6 +75,10 @@ def create_app(
             model=settings.model,
             poll_interval=settings.poll_interval_seconds,
             artifact_ttl_days=settings.artifact_ttl_days,
+            slide_concurrency=settings.slide_concurrency,
+            template_match_threshold=settings.template_match_threshold,
+            default_max_cost_usd=settings.default_max_cost_usd,
+            default_timeout_seconds=settings.default_timeout_seconds,
         )
         thread = threading.Thread(target=worker.run_forever, daemon=True)
         thread.start()
@@ -277,17 +289,61 @@ def create_app(
         mode: Annotated[str, Form()] = "apply",
         slides: Annotated[str, Form()] = "all",
         max_attempts: Annotated[int, Form(ge=1, le=5)] = 3,
-        minimum_font_size_pt: Annotated[float, Form(gt=0)] = 7.5,
+        max_candidates: Annotated[int | None, Form(ge=1, le=3)] = None,
+        minimum_font_size_pt: Annotated[float | None, Form(gt=0)] = None,
+        body_min_font_size_pt: Annotated[float, Form(ge=8)] = 8.0,
+        source_min_font_size_pt: Annotated[float, Form(ge=6)] = 6.0,
+        restyle_mode: Annotated[
+            str, Form(pattern="^(auto|conservative|structural|rebuild)$")
+        ] = "auto",
+        catalog_enabled: Annotated[bool, Form()] = True,
+        max_cost_usd: Annotated[float | None, Form(gt=0)] = None,
+        timeout_seconds: Annotated[int | None, Form(ge=60, le=7200)] = None,
+        trace_level: Annotated[str, Form(pattern="^(none|metadata|full)$")] = "metadata",
+        powerpoint_validation: Annotated[
+            str, Form(pattern="^(off|auto|required)$")
+        ] = "auto",
     ) -> JobResource:
         if bool(file) == bool(source_artifact_id):
             raise HTTPException(status_code=422, detail="provide exactly one file or source_artifact_id")
+        resolved_candidates = max_candidates if max_candidates is not None else min(max_attempts, 3)
+        resolved_body_minimum = (
+            minimum_font_size_pt
+            if minimum_font_size_pt is not None
+            else body_min_font_size_pt
+        )
         payload = {
             "instruction": instruction,
             "content_invariant": True,
             "slides": _parse_slides(slides),
             "max_attempts": max_attempts,
-            "minimum_font_size_pt": minimum_font_size_pt,
+            "max_candidates": resolved_candidates,
+            "legacy_max_attempts_clamped": max_candidates is None and max_attempts > 3,
+            "minimum_font_size_pt": resolved_body_minimum,
+            "body_min_font_size_pt": resolved_body_minimum,
+            "source_min_font_size_pt": source_min_font_size_pt,
+            "restyle_mode": restyle_mode,
+            "catalog_enabled": catalog_enabled,
+            "max_cost_usd": max_cost_usd or settings.default_max_cost_usd,
+            "timeout_seconds": timeout_seconds or settings.default_timeout_seconds,
+            "trace_level": trace_level,
+            "powerpoint_validation": powerpoint_validation,
         }
+
+        def finalize_request(job: JobResource) -> JobResource:
+            if payload["legacy_max_attempts_clamped"]:
+                store.add_event(
+                    job.id,
+                    "request.warning",
+                    {
+                        "code": "max_attempts_clamped",
+                        "message": "legacy max_attempts was capped at three candidates",
+                        "requested": max_attempts,
+                        "effective": resolved_candidates,
+                    },
+                )
+            return job
+
         auxiliary = [*([template] if template else []), *(target_images or [])]
         if source_artifact_id:
             job = await create_artifact_job(JobOperation.BEAUTIFY, source_artifact_id, mode=mode, request_payload=payload)
@@ -297,7 +353,7 @@ def create_app(
                 request_payload["template_artifact_id"] = auxiliary_ids[0]
                 auxiliary_ids = auxiliary_ids[1:]
             request_payload["target_artifact_ids"] = auxiliary_ids
-            return store.replace_request(job.id, request_payload)
+            return finalize_request(store.replace_request(job.id, request_payload))
         assert file is not None
         uploads = [file, *auxiliary]
         result = await create_upload_job(JobOperation.BEAUTIFY, uploads, mode=mode, request_payload=payload)
@@ -308,7 +364,104 @@ def create_app(
             request_payload["template_artifact_id"] = ids[1]
             ids = [ids[0], *ids[2:]]
         request_payload["target_artifact_ids"] = ids[1:]
-        return store.replace_request(result.id, request_payload)
+        return finalize_request(store.replace_request(result.id, request_payload))
+
+    @app.post("/v1/templates/import", response_model=JobResource, status_code=202)
+    async def import_template(
+        file: Annotated[UploadFile, File()],
+        name: Annotated[str | None, Form()] = None,
+        timeout_seconds: Annotated[int, Form(ge=60, le=7200)] = 900,
+    ) -> JobResource:
+        if Path(file.filename or "").suffix.lower() != ".pptx":
+            raise HTTPException(status_code=415, detail="template import accepts PPTX only")
+        return await create_upload_job(
+            JobOperation.TEMPLATE_IMPORT,
+            [file],
+            mode="apply",
+            request_payload={"name": name, "timeout_seconds": timeout_seconds},
+        )
+
+    @app.get("/v1/templates", response_model=list[TemplateResource])
+    def list_templates(include_deleted: bool = False) -> list[TemplateResource]:
+        return catalog.list_templates(include_deleted=include_deleted)
+
+    @app.get("/v1/templates/{template_id}", response_model=TemplateResource)
+    def get_template(template_id: str) -> TemplateResource:
+        try:
+            return catalog.get_template(template_id)
+        except TemplateCatalogError as error:
+            raise HTTPException(status_code=404, detail=str(error)) from error
+
+    @app.delete("/v1/templates/{template_id}", response_model=TemplateResource)
+    def delete_template(template_id: str) -> TemplateResource:
+        try:
+            return catalog.soft_delete(template_id)
+        except TemplateCatalogError as error:
+            raise HTTPException(status_code=404, detail=str(error)) from error
+
+    @app.post("/v1/templates/{template_id}/restore", response_model=TemplateResource)
+    def restore_template(template_id: str) -> TemplateResource:
+        try:
+            return catalog.restore(template_id)
+        except TemplateCatalogError as error:
+            raise HTTPException(status_code=404, detail=str(error)) from error
+
+    @app.post("/v1/templates/reindex", response_model=JobResource, status_code=202)
+    def reindex_templates() -> JobResource:
+        return store.create_job(
+            JobOperation.TEMPLATE_REINDEX,
+            {"index_mode": "incremental"},
+            mode="apply",
+        )
+
+    @app.get("/v1/template-families", response_model=list[TemplateFamilyResource])
+    def list_template_families() -> list[TemplateFamilyResource]:
+        return catalog.list_families()
+
+    @app.patch(
+        "/v1/template-families/{family_id}",
+        response_model=TemplateFamilyResource,
+    )
+    def update_template_family(
+        family_id: str,
+        payload: TemplateFamilyUpdate,
+    ) -> TemplateFamilyResource:
+        try:
+            return catalog.update_family(
+                family_id,
+                name=payload.name,
+                active=payload.active,
+            )
+        except TemplateCatalogError as error:
+            raise HTTPException(status_code=404, detail=str(error)) from error
+
+    @app.post(
+        "/v1/template-families/merge",
+        response_model=TemplateFamilyResource,
+    )
+    def merge_template_families(
+        payload: TemplateFamilyMergeRequest,
+    ) -> TemplateFamilyResource:
+        try:
+            return catalog.merge_families(
+                payload.target_family_id,
+                payload.source_family_ids,
+            )
+        except (TemplateCatalogError, StopIteration) as error:
+            raise HTTPException(status_code=404, detail=str(error)) from error
+
+    @app.post(
+        "/v1/template-families/{family_id}/split",
+        response_model=TemplateFamilyResource,
+    )
+    def split_template_family(
+        family_id: str,
+        payload: TemplateFamilySplitRequest,
+    ) -> TemplateFamilyResource:
+        try:
+            return catalog.split_family(family_id, payload.template_ids, payload.name)
+        except (TemplateCatalogError, StopIteration) as error:
+            raise HTTPException(status_code=404, detail=str(error)) from error
 
     @app.get("/v1/jobs", response_model=list[JobResource])
     def list_jobs() -> list[JobResource]:
@@ -332,6 +485,40 @@ def create_app(
     def artifacts(job_id: str) -> list[dict]:
         job_or_404(job_id)
         return [item.model_dump(mode="json") for item in store.list_artifacts(job_id)]
+
+    @app.get("/v1/jobs/{job_id}/candidates")
+    def candidates(job_id: str) -> list[dict]:
+        job_or_404(job_id)
+        return [
+            item.model_dump(mode="json")
+            for item in store.list_artifacts(job_id)
+            if item.metadata.get("candidate_index") is not None
+        ]
+
+    @app.get("/v1/jobs/{job_id}/trace")
+    def trace(job_id: str) -> dict:
+        job = job_or_404(job_id)
+        if job.request.get("trace_level") == "none":
+            return {"job_id": job_id, "status": "disabled", "events": []}
+        trace_artifact = next(
+            (
+                item
+                for item in store.list_artifacts(job_id)
+                if item.kind == ArtifactKind.TRACE
+            ),
+            None,
+        )
+        if trace_artifact is None:
+            return {
+                "job_id": job_id,
+                "status": "pending",
+                "events": [
+                    item.model_dump(mode="json")
+                    for item in store.events_after(job_id)
+                    if item.event_type.startswith("agent.")
+                ],
+            }
+        return json.loads(store.artifact_path(trace_artifact.id).read_text(encoding="utf-8"))
 
     @app.post(
         "/v1/jobs/{job_id}/bundle",

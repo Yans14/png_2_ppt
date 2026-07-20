@@ -29,10 +29,21 @@ class Worker:
         model: str = "gpt-5.5",
         worker_id: str | None = None,
         poll_interval: float = 0.5,
-        artifact_ttl_days: int = 7,
+        artifact_ttl_days: int = 30,
+        slide_concurrency: int = 2,
+        template_match_threshold: float = 0.75,
+        default_max_cost_usd: float = 5.0,
+        default_timeout_seconds: int = 900,
     ) -> None:
         self.store = store
-        self.executor = OperationExecutor(store, model=model)
+        self.executor = OperationExecutor(
+            store,
+            model=model,
+            slide_concurrency=slide_concurrency,
+            template_match_threshold=template_match_threshold,
+            default_max_cost_usd=default_max_cost_usd,
+            default_timeout_seconds=default_timeout_seconds,
+        )
         self.worker_id = worker_id or f"{socket.gethostname()}-{os.getpid()}-{uuid.uuid4().hex[:8]}"
         self.poll_interval = poll_interval
         self.artifact_ttl_days = artifact_ttl_days
@@ -95,7 +106,7 @@ class Worker:
             )
             self.store.update_job(
                 job.id,
-                status=JobStatus.FAILED,
+                status=JobStatus.FAILED_QUALITY,
                 stage="quality_gate_failed",
                 best_artifact_id=best_id,
                 error={"type": type(error).__name__, "message": str(error)},
@@ -159,6 +170,10 @@ def main(argv: list[str] | None = None) -> int:
         model=args.model or settings.model,
         poll_interval=args.poll_interval or settings.poll_interval_seconds,
         artifact_ttl_days=settings.artifact_ttl_days,
+        slide_concurrency=settings.slide_concurrency,
+        template_match_threshold=settings.template_match_threshold,
+        default_max_cost_usd=settings.default_max_cost_usd,
+        default_timeout_seconds=settings.default_timeout_seconds,
     )
     for signum in (signal.SIGINT, signal.SIGTERM):
         signal.signal(signum, lambda *_: worker.stop())

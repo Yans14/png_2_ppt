@@ -1,6 +1,6 @@
 {
   "name": "editable-pptx-reconstructor",
-  "version": "2.0.0",
+  "version": "2.1.0",
   "private": true,
   "main": "src/render-image-spec.js",
   "scripts": {
@@ -11,10 +11,12 @@
     "render:image-spec": "node src/render-image-spec.js",
     "benchmark:fetch": "python3 scripts/fetch_benchmarks.py",
     "benchmark": "python3 scripts/run_benchmarks.py",
+    "benchmark:beautify:fixtures": "node scripts/generate_beautify_eval_corpus.js",
+    "benchmark:beautify": "python3 scripts/run_beautify_evals.py",
     "compat:fixture": "python3 scripts/render_compatibility_fixture.py --output out/powerpoint-compatibility.pptx",
     "validate:powerpoint": "python3 scripts/validate_powerpoint.py",
     "test": "node --test",
-    "test:python": "python3 -m unittest discover -s test -p 'test_*.py' -v",
+    "test:python": "node scripts/run_python_tests.js",
     "test:all": "npm test && npm run test:python"
   },
   "keywords": [

@@ -1,0 +1,32 @@
+{
+  "version": 1,
+  "description": "Twenty synthetic, public, business-slide fixtures for the GPT-5.5 beautify quality gate.",
+  "acceptance": {
+    "minimum_accepted": 18,
+    "minimum_reviewer_score": 8.0,
+    "minimum_average_improvement": 1.0,
+    "hard_gate_pass_rate": 1.0
+  },
+  "cases": [
+    {"id": "title-01", "category": "title", "title": "Global infrastructure outlook", "variant": 1},
+    {"id": "title-02", "category": "title", "title": "Investment thesis", "variant": 2},
+    {"id": "content-01", "category": "content", "title": "Market momentum remains resilient", "variant": 1},
+    {"id": "content-02", "category": "content", "title": "Three drivers of value creation", "variant": 2},
+    {"id": "dense-01", "category": "dense", "title": "Operating model assessment", "variant": 1},
+    {"id": "dense-02", "category": "dense", "title": "Strategic priorities and dependencies", "variant": 2},
+    {"id": "dense-03", "category": "dense", "title": "Commercial diligence findings", "variant": 3},
+    {"id": "table-01", "category": "table", "title": "Peer trading metrics", "variant": 1},
+    {"id": "table-02", "category": "table", "title": "Scenario comparison", "variant": 2},
+    {"id": "table-03", "category": "table", "title": "Regional performance", "variant": 3},
+    {"id": "chart-01", "category": "chart", "title": "Revenue growth by segment", "variant": 1},
+    {"id": "chart-02", "category": "chart", "title": "Margin expansion", "variant": 2},
+    {"id": "chart-03", "category": "chart", "title": "Market share evolution", "variant": 3},
+    {"id": "valuation-01", "category": "valuation", "title": "Valuation summary", "variant": 1},
+    {"id": "valuation-02", "category": "valuation", "title": "Comparable company analysis", "variant": 2},
+    {"id": "timeline-01", "category": "timeline", "title": "Transaction roadmap", "variant": 1},
+    {"id": "timeline-02", "category": "timeline", "title": "Implementation milestones", "variant": 2},
+    {"id": "visual-01", "category": "visual", "title": "Customer ecosystem", "variant": 1},
+    {"id": "complex-01", "category": "complex", "title": "Complex object fallback", "variant": 1, "inject_diagram_part": true},
+    {"id": "complex-02", "category": "complex", "title": "Animation-safe structural edit", "variant": 2, "inject_diagram_part": true}
+  ]
+}

@@ -2,6 +2,12 @@ name: powerpoint-compatibility
 
 on:
   workflow_dispatch:
+    inputs:
+      run_paid_beautify:
+        description: Run the 20-case GPT-5.5 qualification on the macOS PowerPoint runner
+        required: false
+        default: false
+        type: boolean
 
 jobs:
   powerpoint-windows:
@@ -46,3 +52,44 @@ jobs:
         with:
           name: powerpoint-macos-report
           path: ${{ runner.temp }}/powerpoint-report.json
+      - name: Run paid GPT-5.5 qualification with native PowerPoint gates
+        if: ${{ inputs.run_paid_beautify }}
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          EDITABLE_PPTX_HOME: ${{ runner.temp }}/editable-pptx-service
+          EDITABLE_PPTX_MODEL: gpt-5.5
+          EDITABLE_PPTX_HOST: 127.0.0.1
+          EDITABLE_PPTX_PORT: "8765"
+        run: |
+          pip install -e '.[api,agents]'
+          npm run benchmark:beautify:fixtures
+          editable-pptx-api > "$RUNNER_TEMP/editable-pptx-api.log" 2>&1 &
+          API_PID=$!
+          editable-pptx-worker > "$RUNNER_TEMP/editable-pptx-worker.log" 2>&1 &
+          WORKER_PID=$!
+          trap 'kill "$API_PID" "$WORKER_PID" 2>/dev/null || true' EXIT
+          for attempt in {1..60}; do
+            curl --fail --silent http://127.0.0.1:8765/v1/health && break
+            sleep 1
+          done
+          python scripts/run_beautify_evals.py \
+            --base-url http://127.0.0.1:8765 \
+            --powerpoint-validation required \
+            --output "$RUNNER_TEMP/beautify-v1-summary.json" \
+            --output-decks-dir "$RUNNER_TEMP/beautify-v1-decks"
+          for deck in "$RUNNER_TEMP"/beautify-v1-decks/*.pptx; do
+            python scripts/validate_powerpoint.py "$deck" \
+              --mode required \
+              --workspace "$RUNNER_TEMP/ppt-validation-$(basename "$deck" .pptx)" \
+              --report "$RUNNER_TEMP/powerpoint-$(basename "$deck" .pptx).json"
+          done
+      - uses: actions/upload-artifact@v4
+        if: ${{ always() && inputs.run_paid_beautify }}
+        with:
+          name: beautify-v1-powerpoint-macos
+          path: |
+            ${{ runner.temp }}/beautify-v1-summary.json
+            ${{ runner.temp }}/beautify-v1-decks
+            ${{ runner.temp }}/powerpoint-*.json
+            ${{ runner.temp }}/editable-pptx-api.log
+            ${{ runner.temp }}/editable-pptx-worker.log

@@ -63,10 +63,10 @@ cp .env.example .env
 Add `OPENAI_API_KEY` to `.env`, or export it in the shell. The project never logs the key,
 and `.env` is ignored by Git.
 
-For the local HTTP service, install the API extra instead:
+For the local HTTP service and the GPT-5.5 quality loop, install both optional extras:
 
 ```bash
-pip install -e '.[api]'
+pip install -e '.[api,agents]'
 editable-pptx-api --with-worker
 editable-pptx-doctor
 ```
@@ -77,7 +77,7 @@ into memory and is never copied into SQLite, job artifacts, reports, or logs.
 
 ## Asynchronous editing API
 
-Version 2 exposes six independent job endpoints:
+Version 2.1 exposes six independent editing job endpoints:
 
 | Endpoint | Purpose |
 |---|---|
@@ -96,17 +96,23 @@ flow through reconstruction, notes, beautification, render, and validation witho
 uploaded again.
 
 Jobs are polled at `/v1/jobs/{job_id}` or streamed as server-sent events at
-`/v1/jobs/{job_id}/events`. Cancellation, retry, artifact download, and a seven-day local
+`/v1/jobs/{job_id}/events`. Cancellation, retry, artifact download, and a 30-day local
 artifact TTL are supported. SQLite stores metadata; immutable files live in the service
 home (`~/.local/share/editable-pptx-service` by default).
 `POST /v1/jobs/{job_id}/bundle` creates an optional ZIP containing `manifest.json` and
 all individual artifacts.
 
-Notes and beautification use GPT‑5.5 for both planning and visual review. Each attempt is
-transactional: extract stable OOXML shape IDs, request a typed patch, apply it to a copy,
-render the result, run deterministic content/OOXML gates, and ask GPT‑5.5 to review the
-candidate. A rejected result is repaired up to three times. If all attempts fail, the job
-is marked failed but its highest-scoring candidate remains downloadable.
+Notes and beautification use GPT‑5.5 for planning and visual review. Beautification runs
+an Analyst → Designer → deterministic executor → Reviewer pipeline. It creates up to three
+independent candidates from the immutable source, runs two Designer calls concurrently for
+multi-slide decks, rejects hard-gate failures before visual review, and selects valid
+candidates only by the Reviewer score. Scores between 7.5 and 8.5 receive an independent
+second vote. If any selected slide remains below 8, the whole deck receives the terminal
+`failed_quality` status; the best invariant-safe diagnostic candidate remains downloadable.
+
+The default job artifact TTL is 30 days. Template decks live in a separate persistent
+catalog and remain there until an explicit soft delete. Metadata traces contain only IDs,
+hashes, model/tool names, scores, costs, and latency unless `trace_level=full` is requested.
 
 The note-source priority is API instruction, PowerPoint comments, speaker notes, then
 visible authoring callouts. Unsupported native objects such as charts, SmartArt, OLE,
@@ -125,12 +131,91 @@ curl -F file=@deck.pptx \
 curl -F source_artifact_id="$PPTX_ARTIFACT_ID" \
   -F template=@template.pptx \
   -F instruction='Tighten hierarchy and spacing; preserve all business content' \
+  -F restyle_mode=auto \
+  -F max_candidates=3 \
+  -F max_cost_usd=5 \
+  -F trace_level=metadata \
   http://127.0.0.1:8765/v1/beautify
 ```
 
 The API is localhost-only by default. Binding to another interface is refused unless
 `EDITABLE_PPTX_BEARER_TOKEN` is configured; when set, all non-health API calls require
 `Authorization: Bearer …`.
+
+### GPT-5.5 beautification contract
+
+`POST /v1/beautify` keeps all historical fields and adds:
+
+| Field | Default | Contract |
+|---|---:|---|
+| `restyle_mode` | `auto` | `auto`, `conservative`, `structural`, or `rebuild` |
+| `catalog_enabled` | `true` | enable structural template matching |
+| `max_candidates` | `3` | one to three independent candidates |
+| `body_min_font_size_pt` | `8` | hard minimum for body text |
+| `source_min_font_size_pt` | `6` | hard minimum for sources and footnotes |
+| `max_cost_usd` | `5` | per-deck GPT-5.5 budget |
+| `timeout_seconds` | `900` | timeout applied to external and rendering phases |
+| `trace_level` | `metadata` | `none`, `metadata`, or `full` |
+| `powerpoint_validation` | `auto` | `off`, `auto`, or `required` |
+
+Legacy `max_attempts` remains accepted and is capped at three with a
+`request.warning` SSE event. `mode=plan` returns the analysis, selected template, typed
+operation plan, scorecard, and previews without publishing a final PPTX.
+
+Every candidate must keep the slide count, case-insensitive word multiset, numbers, table
+cells, native chart series, original image/logo hashes, protected relationships, animation
+XML, and transitions. Tables and charts remain native; photos may be cropped or repositioned;
+logos may only be moved or proportionally resized. SmartArt, OLE, embedded workbooks, and
+animation timelines block rebuild and force structural OOXML editing.
+
+### Local template catalog
+
+Template import is asynchronous and stores immutable full decks on disk with a SQLite
+index, SHA-256 and perceptual deduplication, inferred families, per-slide archetypes, and
+structure-dominant features. GPT-5.5 reranks only the deterministic top five, and automatic
+templates are used only above 0.75 confidence. An uploaded job template forces its family.
+
+| Endpoint | Purpose |
+|---|---|
+| `POST /v1/templates/import` | render, deduplicate and index a PPTX |
+| `GET /v1/templates` / `GET /v1/templates/{id}` | inspect catalog entries |
+| `DELETE /v1/templates/{id}` | soft delete |
+| `POST /v1/templates/{id}/restore` | restore a soft-deleted template |
+| `POST /v1/templates/reindex` | incremental reindex job |
+| `/v1/template-families/*` | rename, enable/disable, merge and split families |
+| `GET /v1/jobs/{id}/candidates` | candidate PPTX, previews and scorecards |
+| `GET /v1/jobs/{id}/trace` | trace allowed by the job trace level |
+
+The same operations are available locally:
+
+```bash
+editable-pptx-templates import ./templates/public-template.pptx
+editable-pptx-templates list
+editable-pptx-templates families
+editable-pptx-templates reindex
+```
+
+The provider boundary is intentionally isolated in `editable_pptx/agents_runtime.py`.
+Version 2.1 ships only the OpenAI provider; there is no silent model downgrade. A future
+Azure adapter can implement the same factory without changing the deterministic executor.
+
+### Run the 20-slide beautification qualification
+
+The committed manifest is synthetic and public; generated decks are ignored by Git.
+
+```bash
+npm run benchmark:beautify:fixtures
+
+# Start the API/worker in another shell, then run the paid GPT-5.5 qualification.
+npm run benchmark:beautify -- --base-url http://127.0.0.1:8765
+```
+
+The runner enforces at least 18 accepted slides, Reviewer score ≥8, average improvement
+≥1 point, and 100% hard-gate success. CI always generates and OOXML-validates all 20 decks;
+the paid visual qualification remains an explicit run because it requires API quota.
+The manual `powerpoint-compatibility` workflow has a `run_paid_beautify` option. On a
+licensed self-hosted macOS runner it stores the 20 best outputs and requires a native
+PowerPoint open/save/reopen validation for every published candidate.
 
 ### Run the 30-case endpoint quality suite
 

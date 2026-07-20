@@ -23,6 +23,7 @@ coverage/
 
 # Local generated artifacts
 *.pptx
+*.pptm
 *.pdf
 *.png
 *.jpg
@@ -32,6 +33,7 @@ coverage/
 *.whl
 *.log
 *.tmp
+*.sqlite3
 .cache/
 .pytest_cache/
 
